@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0.0-alpha"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -31,6 +31,8 @@ android {
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "towerchat2026"
                 keyAlias = System.getenv("KEY_ALIAS") ?: "towerchat"
                 keyPassword = System.getenv("KEY_PASSWORD") ?: "towerchat2026"
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }

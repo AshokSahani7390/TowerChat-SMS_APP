@@ -11,6 +11,7 @@ app/build/
 *.ap_
 *.zip
 output.json
+!docs/*.apk
 
 # Local Configuration & Machine-Specific Files (Contains usernames & paths)
 local.properties
