@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Towerchat</string>
+    <string name="app_tagline">SMS-Native Cellular Messenger</string>
+    <string name="privacy_notice_title">Zero-Server &amp; Plaintext Disclosure</string>
+    <string name="privacy_notice_body">Towerchat operates exclusively across the cellular carrier network (Jio, Airtel, BSNL, Vi) without any servers or database persistence. Messages exist strictly in RAM and are permanently erased once you leave the app.\n\nNote: As standard SMS messages, traffic is not end-to-end encrypted at the transport layer and is visible to the cellular network operator.</string>
+    <string name="foreground_service_title">Towerchat Cellular Listener</string>
+    <string name="foreground_service_desc">Actively listening for incoming cellular SMS messages</string>
+    <string name="quota_counter_format">%d / 100 SMS left today</string>
+    <string name="start_chat">Start Chat</string>
+    <string name="enter_phone_number">Enter recipient phone number</string>
+    <string name="call_contact">Call Contact</string>
+    <string name="send">Send</string>
+</resources>
