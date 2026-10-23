@@ -14,8 +14,8 @@ android {
         applicationId = "com.towerchat.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -25,7 +25,11 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystoreFile = file("../towerchat-release.jks")
+            val keystoreFile = if (file("../towerchat-release-v1.jks").exists()) {
+                file("../towerchat-release-v1.jks")
+            } else {
+                file("../towerchat-release.jks")
+            }
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "towerchat2026"
