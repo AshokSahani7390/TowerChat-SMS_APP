@@ -232,7 +232,19 @@ class SecureConfigStorage @Inject constructor(
         prefs.edit().putBoolean(key, enabled).apply()
     }
 
-    // --- 10. Zero-Storage Panic Wipe ---
+    // --- 10. App-to-App (WhatsApp Style) Mode ---
+    fun isAppOnlyMode(recipientNumber: String): Boolean {
+        val normalized = recipientNumber.filter { it.isDigit() || it == '+' }
+        // Default to true: Messages sent exclusively to TowerChat app on Port 8901
+        return prefs.getBoolean("cfg_app_only_" + normalized, true)
+    }
+
+    fun setAppOnlyMode(recipientNumber: String, enabled: Boolean) {
+        val normalized = recipientNumber.filter { it.isDigit() || it == '+' }
+        prefs.edit().putBoolean("cfg_app_only_" + normalized, enabled).apply()
+    }
+
+    // --- 11. Zero-Storage Panic Wipe ---
     fun wipeAllConfiguration() {
         prefs.edit().clear().apply()
     }

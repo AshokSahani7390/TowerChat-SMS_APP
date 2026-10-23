@@ -96,6 +96,7 @@ data class ChatDetailState(
     val isTyping: Boolean = false,
     val isPriority: Boolean = false,
     val isBurnOnExit: Boolean = true,
+    val isAppOnlyMode: Boolean = true,
     val templates: List<String> = emptyList()
 )
 
@@ -103,6 +104,7 @@ data class ChatDetailActions(
     val onDismissKeyChange: () -> Unit = {},
     val onTogglePriority: () -> Unit = {},
     val onToggleBurnOnExit: () -> Unit = {},
+    val onToggleAppOnlyMode: () -> Unit = {},
     val onToggleSaveMessage: (String) -> Unit = {},
     val onDeleteMessage: (String) -> Unit = {},
     val onDeleteConversation: () -> Unit = {},
@@ -268,6 +270,8 @@ fun ChatDetailScreen(
             ChatComposeBar(
                 inputText = state.inputText,
                 isQuotaExhausted = state.quota.isExhausted,
+                isAppOnlyMode = state.isAppOnlyMode,
+                onToggleAppOnlyMode = actions.onToggleAppOnlyMode,
                 onInputTextChange = actions.onInputTextChange,
                 onSendMessage = actions.onSendMessage,
                 onOpenTemplates = { showTemplatesDialog = true }
@@ -670,6 +674,8 @@ private fun ChatMessagesSection(
 private fun ChatComposeBar(
     inputText: String,
     isQuotaExhausted: Boolean,
+    isAppOnlyMode: Boolean,
+    onToggleAppOnlyMode: () -> Unit,
     onInputTextChange: (String) -> Unit,
     onSendMessage: () -> Unit,
     onOpenTemplates: () -> Unit
@@ -711,9 +717,15 @@ private fun ChatComposeBar(
                     enabled = !isQuotaExhausted,
                     placeholder = {
                         Text(
-                            text = if (isQuotaExhausted) "Quota exhausted" else "Text message (SMS)",
+                            text = if (isQuotaExhausted) {
+                                "Quota exhausted"
+                            } else if (isAppOnlyMode) {
+                                "TowerChat (App-to-App only)..."
+                            } else {
+                                "Plain SMS (Only message sent)..."
+                            },
                             color = GmTextMuted,
-                            fontSize = 15.sp
+                            fontSize = 14.sp
                         )
                     },
                     textStyle = TextStyle(
@@ -740,18 +752,36 @@ private fun ChatComposeBar(
                     modifier = Modifier.weight(1f)
                 )
 
+                // WhatsApp-Style Mode Switch: App-Only (Port 8901) vs Normal SMS
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(GmSurface)
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isAppOnlyMode) GmPrimary.copy(alpha = 0.2f) else GmSurface)
+                        .border(
+                            width = 1.dp,
+                            color = if (isAppOnlyMode) GmPrimary else DarkBorder,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .clickable { onToggleAppOnlyMode() }
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
                 ) {
-                    Text(
-                        text = "SMS",
-                        color = GmTextMuted,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isAppOnlyMode) Icons.Default.Lock else Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = if (isAppOnlyMode) GmPrimary else GmTextMuted,
+                            modifier = Modifier.size(10.dp)
+                        )
+                        Text(
+                            text = if (isAppOnlyMode) "App Only" else "SMS",
+                            color = if (isAppOnlyMode) GmPrimary else GmTextMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(4.dp))

@@ -70,6 +70,7 @@ class MainActivity : ComponentActivity() {
                 val inputText by viewModel.inputText.collectAsState()
                 val priorityContacts by viewModel.priorityContacts.collectAsState()
                 val isTyping by viewModel.isRecipientTyping.collectAsState()
+                val isAppOnlyMode by viewModel.isAppOnlyMode.collectAsState()
 
                 AnimatedContent(
                     targetState = when {
@@ -128,12 +129,14 @@ class MainActivity : ComponentActivity() {
                                         isTyping = isTyping,
                                         isPriority = viewModel.isPriorityContact(recipient),
                                         isBurnOnExit = viewModel.isBurnOnExit(recipient),
+                                        isAppOnlyMode = isAppOnlyMode,
                                         templates = viewModel.getTemplates()
                                     ),
                                     actions = com.towerchat.app.ui.screens.ChatDetailActions(
                                         onDismissKeyChange = { viewModel.dismissKeyChangeWarning(recipient) },
                                         onTogglePriority = { viewModel.togglePriorityContact(recipient) },
                                         onToggleBurnOnExit = { viewModel.toggleBurnOnExit(recipient) },
+                                        onToggleAppOnlyMode = { viewModel.toggleAppOnlyMode(recipient) },
                                         onToggleSaveMessage = { messageId -> viewModel.toggleSaveMessage(recipient, messageId) },
                                         onDeleteMessage = { messageId -> viewModel.deleteMessage(recipient, messageId) },
                                         onDeleteConversation = { viewModel.deleteConversation(recipient) },

@@ -54,6 +54,14 @@
             <intent-filter android:priority="999">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
+            <!-- WhatsApp-Style Dedicated Port for TowerChat App-to-App Messaging (Port 8901) -->
+            <!-- Bypasses Google Messages & default SMS inbox entirely -->
+            <intent-filter>
+                <action android:name="android.intent.action.DATA_SMS_RECEIVED" />
+                <data android:scheme="sms" />
+                <data android:host="localhost" />
+                <data android:port="8901" />
+            </intent-filter>
         </receiver>
 
         <!-- BroadcastReceiver for SMS Sent / Delivered callbacks -->

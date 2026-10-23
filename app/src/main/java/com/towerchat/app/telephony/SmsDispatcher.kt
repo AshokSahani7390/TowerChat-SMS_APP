@@ -34,6 +34,9 @@ class SmsDispatcher @Inject constructor(
         const val EXTRA_RECIPIENT_NUMBER = "extra_recipient_number"
         const val EXTRA_PART_INDEX = "extra_part_index"
         const val EXTRA_TOTAL_PARTS = "extra_total_parts"
+
+        // Dedicated port for TowerChat App-to-App messaging (bypasses Google Messages & default SMS inbox)
+        const val TOWERCHAT_DATA_PORT: Short = 8901
     }
 
     private fun getSmsManager(): SmsManager {
@@ -47,13 +50,19 @@ class SmsDispatcher @Inject constructor(
 
     /**
      * Sends an X25519/ECDH public key exchange handshake over SMS.
+     * When isAppOnly is true, dispatches over port 8901 so other SMS apps never see it.
      */
-    fun sendHandshake(recipientNumber: String): Result<Unit> {
+    fun sendHandshake(recipientNumber: String, isAppOnly: Boolean = true): Result<Unit> {
         val normalizedRecipient = Contact.normalizePhoneNumber(recipientNumber)
         val handshakeBody = HandshakeProtocol.buildHandshakeMessage(keySessionRepository.myPublicKeyBase64)
         return try {
             val smsManager = getSmsManager()
-            smsManager.sendTextMessage(normalizedRecipient, null, handshakeBody, null, null)
+            if (isAppOnly) {
+                val bytes = handshakeBody.toByteArray(Charsets.UTF_8)
+                smsManager.sendDataMessage(normalizedRecipient, null, TOWERCHAT_DATA_PORT, bytes, null, null)
+            } else {
+                // In standard SMS mode, omit handshake to keep message inbox completely clean
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -61,25 +70,33 @@ class SmsDispatcher @Inject constructor(
     }
 
     /**
-     * Dispatches an AES-256-GCM encrypted SMS to the cellular network.
-     * Carrier receives only Base64 ciphertext with TC_MSG: prefix.
+     * Dispatches an SMS to the cellular network.
+     * @param isAppOnly When true (default), sends via port-directed Data SMS (Port 8901).
+     *                  This ensures the message is received ONLY inside TowerChat (like WhatsApp),
+     *                  completely bypassing Google Messages, Samsung Messages, or standard SMS inboxes.
+     *                  When false, sends as standard SMS with ONLY the clean user text.
      */
-    fun sendMessage(recipientNumber: String, text: String): Result<Message> {
+    fun sendMessage(recipientNumber: String, text: String, isAppOnly: Boolean = true): Result<Message> {
         val normalizedRecipient = Contact.normalizePhoneNumber(recipientNumber)
         val sharedSecret = keySessionRepository.getSharedSecret(normalizedRecipient)
 
-        // If no key exchange completed yet, automatically initiate handshake
-        if (sharedSecret == null) {
-            sendHandshake(normalizedRecipient)
-        }
+        val wirePayload: String
+        if (isAppOnly) {
+            // App-to-App mode: If no key exchange yet, send silent handshake over Port 8901
+            if (sharedSecret == null) {
+                sendHandshake(normalizedRecipient, isAppOnly = true)
+            }
 
-        // Encrypt payload if shared secret exists, else inform in payload
-        val wirePayload = if (sharedSecret != null) {
-            val ciphertext = CryptoManager.encrypt(text, sharedSecret)
-            HandshakeProtocol.buildEncryptedMessage(ciphertext)
+            wirePayload = if (sharedSecret != null) {
+                val ciphertext = CryptoManager.encrypt(text, sharedSecret)
+                HandshakeProtocol.buildEncryptedMessage(ciphertext)
+            } else {
+                text
+            }
         } else {
-            // Initiate handshake and send first message
-            text
+            // Standard SMS mode: Send EXCLUSIVELY the raw user text (e.g. "hii").
+            // Zero handshake, zero typing indicator, zero metadata prefixes!
+            wirePayload = text
         }
 
         val quota = sessionManager.quotaState.value
@@ -113,76 +130,73 @@ class SmsDispatcher @Inject constructor(
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            if (segments <= 1) {
-                val sentIntent = PendingIntent.getBroadcast(
-                    context,
-                    message.id.hashCode(),
-                    Intent(ACTION_SMS_SENT).apply {
-                        setPackage(context.packageName)
-                        putExtra(EXTRA_MESSAGE_ID, message.id)
-                        putExtra(EXTRA_RECIPIENT_NUMBER, normalizedRecipient)
-                        putExtra(EXTRA_PART_INDEX, 0)
-                        putExtra(EXTRA_TOTAL_PARTS, 1)
-                    },
-                    flags
-                )
+            val sentIntent = PendingIntent.getBroadcast(
+                context,
+                message.id.hashCode(),
+                Intent(ACTION_SMS_SENT).apply {
+                    setPackage(context.packageName)
+                    putExtra(EXTRA_MESSAGE_ID, message.id)
+                    putExtra(EXTRA_RECIPIENT_NUMBER, normalizedRecipient)
+                    putExtra(EXTRA_PART_INDEX, 0)
+                    putExtra(EXTRA_TOTAL_PARTS, 1)
+                },
+                flags
+            )
 
-                val deliveredIntent = PendingIntent.getBroadcast(
-                    context,
-                    message.id.hashCode() + 1,
-                    Intent(ACTION_SMS_DELIVERED).apply {
-                        setPackage(context.packageName)
-                        putExtra(EXTRA_MESSAGE_ID, message.id)
-                    },
-                    flags
-                )
+            val deliveredIntent = PendingIntent.getBroadcast(
+                context,
+                message.id.hashCode() + 1,
+                Intent(ACTION_SMS_DELIVERED).apply {
+                    setPackage(context.packageName)
+                    putExtra(EXTRA_MESSAGE_ID, message.id)
+                },
+                flags
+            )
 
-                smsManager.sendTextMessage(
-                    normalizedRecipient,
-                    null,
-                    wirePayload,
-                    sentIntent,
-                    deliveredIntent
-                )
+            if (isAppOnly) {
+                // Send via Port 8901 Data SMS (Received exclusively by TowerChat app)
+                val payloadBytes = wirePayload.toByteArray(Charsets.UTF_8)
+                sendDataPayload(smsManager, normalizedRecipient, TOWERCHAT_DATA_PORT, payloadBytes, sentIntent, deliveredIntent)
             } else {
-                // Multipart SMS for larger payloads
-                val parts = smsManager.divideMessage(wirePayload)
-                val sentIntents = ArrayList<PendingIntent>()
-                val deliveryIntents = ArrayList<PendingIntent>()
+                // Send via Standard SMS (Received by normal SMS apps)
+                if (segments <= 1) {
+                    smsManager.sendTextMessage(
+                        normalizedRecipient,
+                        null,
+                        wirePayload,
+                        sentIntent,
+                        deliveredIntent
+                    )
+                } else {
+                    val parts = smsManager.divideMessage(wirePayload)
+                    val sentIntents = ArrayList<PendingIntent>()
+                    val deliveryIntents = ArrayList<PendingIntent>()
 
-                parts.forEachIndexed { index, _ ->
-                    val sentIntent = PendingIntent.getBroadcast(
-                        context,
-                        message.id.hashCode() + index,
-                        Intent(ACTION_SMS_SENT).apply {
-                            setPackage(context.packageName)
-                            putExtra(EXTRA_MESSAGE_ID, message.id)
-                            putExtra(EXTRA_RECIPIENT_NUMBER, normalizedRecipient)
-                            putExtra(EXTRA_PART_INDEX, index)
-                            putExtra(EXTRA_TOTAL_PARTS, parts.size)
-                        },
-                        flags
+                    parts.forEachIndexed { index, _ ->
+                        val partSentIntent = PendingIntent.getBroadcast(
+                            context,
+                            message.id.hashCode() + index,
+                            Intent(ACTION_SMS_SENT).apply {
+                                setPackage(context.packageName)
+                                putExtra(EXTRA_MESSAGE_ID, message.id)
+                                putExtra(EXTRA_RECIPIENT_NUMBER, normalizedRecipient)
+                                putExtra(EXTRA_PART_INDEX, index)
+                                putExtra(EXTRA_TOTAL_PARTS, parts.size)
+                            },
+                            flags
+                        )
+                        sentIntents.add(partSentIntent)
+                        deliveryIntents.add(deliveredIntent)
+                    }
+
+                    smsManager.sendMultipartTextMessage(
+                        normalizedRecipient,
+                        null,
+                        parts,
+                        sentIntents,
+                        deliveryIntents
                     )
-                    val deliveryIntent = PendingIntent.getBroadcast(
-                        context,
-                        message.id.hashCode() + 1000 + index,
-                        Intent(ACTION_SMS_DELIVERED).apply {
-                            setPackage(context.packageName)
-                            putExtra(EXTRA_MESSAGE_ID, message.id)
-                        },
-                        flags
-                    )
-                    sentIntents.add(sentIntent)
-                    deliveryIntents.add(deliveryIntent)
                 }
-
-                smsManager.sendMultipartTextMessage(
-                    normalizedRecipient,
-                    null,
-                    parts,
-                    sentIntents,
-                    deliveryIntents
-                )
             }
 
             return Result.success(message)
@@ -196,22 +210,51 @@ class SmsDispatcher @Inject constructor(
         }
     }
 
+    private fun sendDataPayload(
+        smsManager: SmsManager,
+        recipientNumber: String,
+        port: Short,
+        data: ByteArray,
+        sentIntent: PendingIntent?,
+        deliveredIntent: PendingIntent?
+    ) {
+        val maxSingleSize = 130
+        if (data.size <= maxSingleSize) {
+            smsManager.sendDataMessage(recipientNumber, null, port, data, sentIntent, deliveredIntent)
+        } else {
+            // Slices for larger payloads
+            val chunkSize = 120
+            val totalChunks = (data.size + chunkSize - 1) / chunkSize
+            for (i in 0 until totalChunks) {
+                val start = i * chunkSize
+                val end = (start + chunkSize).coerceAtMost(data.size)
+                val slice = data.copyOfRange(start, end)
+                val header = "[${i + 1}/$totalChunks]".toByteArray(Charsets.UTF_8)
+                val chunkWithHeader = header + slice
+                val isLast = (i == totalChunks - 1)
+                smsManager.sendDataMessage(
+                    recipientNumber,
+                    null,
+                    port,
+                    chunkWithHeader,
+                    if (isLast) sentIntent else null,
+                    if (isLast) deliveredIntent else null
+                )
+            }
+        }
+    }
+
     /**
-     * Cellular protocol: typing indicator (throttled to max 1 SMS / 60 seconds per recipient).
+     * Typing indicators over cellular SMS are intentionally disabled to prevent quota waste
+     * and spamming standard SMS inboxes with TC_TYPING:.
      */
     fun sendTypingIndicator(recipientNumber: String) {
-        val normalizedRecipient = Contact.normalizePhoneNumber(recipientNumber)
-        val now = System.currentTimeMillis()
-        val lastSent = lastTypingSentMap[normalizedRecipient] ?: 0L
-        if (now - lastSent < 60_000) return // Throttled
-
-        lastTypingSentMap[normalizedRecipient] = now
-        val payload = TowerchatProtocol.buildTyping()
-        dispatchRawProtocolPayload(normalizedRecipient, payload)
+        // No-op: Zero cellular SMS messages sent for typing events
     }
 
     /**
      * Cellular protocol: read receipt for active open conversation.
+     * Dispatched over Port 8901 so other apps never see it.
      */
     fun sendReadReceipt(recipientNumber: String, timestamp: Long) {
         val normalizedRecipient = Contact.normalizePhoneNumber(recipientNumber)
@@ -221,6 +264,7 @@ class SmsDispatcher @Inject constructor(
 
     /**
      * Cellular protocol: emoji message reaction attached to message timestamp.
+     * Dispatched over Port 8901 so other apps never see it.
      */
     fun sendReaction(recipientNumber: String, emoji: String, targetTimestamp: Long) {
         val normalizedRecipient = Contact.normalizePhoneNumber(recipientNumber)
@@ -240,7 +284,9 @@ class SmsDispatcher @Inject constructor(
                 plaintext
             }
             val smsManager = getSmsManager()
-            smsManager.sendTextMessage(recipientNumber, null, wirePayload, null, null)
+            val bytes = wirePayload.toByteArray(Charsets.UTF_8)
+            // Send exclusively on Port 8901 so normal SMS apps never see protocol packets
+            smsManager.sendDataMessage(recipientNumber, null, TOWERCHAT_DATA_PORT, bytes, null, null)
         } catch (_: Exception) {}
     }
 }

@@ -39,22 +39,111 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
     @Inject
     lateinit var smsDispatcher: SmsDispatcher
 
+    companion object {
+        const val ACTION_DATA_SMS_RECEIVED = "android.intent.action.DATA_SMS_RECEIVED"
+        private val dataChunkBuffer = mutableMapOf<String, MutableMap<Int, ByteArray>>()
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        val action = intent.action ?: return
 
-        val smsMessages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
-        if (smsMessages.isEmpty()) return
+        // 1. Handle WhatsApp-Style App-to-App Data SMS on Port 8901 (Bypasses Google Messages)
+        if (action == ACTION_DATA_SMS_RECEIVED) {
+            val uri = intent.data
+            val port = uri?.port ?: -1
+            if (port != 8901 && port != -1) return
 
-        // Group multipart SMS PDUs by originating address
-        val senderAddress = smsMessages[0].displayOriginatingAddress ?: return
-        val normalizedSender = Contact.normalizePhoneNumber(senderAddress)
+            val bundle = intent.extras ?: return
+            val pdus = bundle.get("pdus") as? Array<*> ?: return
+            val format = bundle.getString("format")
+            if (pdus.isEmpty()) return
 
-        val fullBody = buildString {
-            for (sms in smsMessages) {
-                append(sms.displayMessageBody)
+            var senderAddress: String? = null
+            var timestamp = System.currentTimeMillis()
+            val fullDataBytes = ArrayList<Byte>()
+
+            for (pduObj in pdus) {
+                val pdu = pduObj as? ByteArray ?: continue
+                val sms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    android.telephony.SmsMessage.createFromPdu(pdu, format)
+                } else {
+                    @Suppress("DEPRECATION")
+                    android.telephony.SmsMessage.createFromPdu(pdu)
+                }
+                if (senderAddress == null) {
+                    senderAddress = sms.displayOriginatingAddress ?: sms.originatingAddress
+                    timestamp = sms.timestampMillis
+                }
+                val userData = sms.userData
+                if (userData != null && userData.isNotEmpty()) {
+                    for (b in userData) fullDataBytes.add(b)
+                }
             }
+
+            if (senderAddress == null) return
+            val normalizedSender = Contact.normalizePhoneNumber(senderAddress)
+            val rawPayload = String(fullDataBytes.toByteArray(), Charsets.UTF_8)
+            val assembledBody = reassembleChunk(normalizedSender, rawPayload) ?: return
+
+            processIncomingMessage(context, normalizedSender, assembledBody, timestamp, pdus.size)
+            return
         }
 
+        // 2. Handle Standard Cellular Text SMS (If received as normal SMS)
+        if (action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+            val smsMessages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
+            if (smsMessages.isEmpty()) return
+
+            val senderAddress = smsMessages[0].displayOriginatingAddress ?: return
+            val normalizedSender = Contact.normalizePhoneNumber(senderAddress)
+
+            val fullBody = buildString {
+                for (sms in smsMessages) {
+                    append(sms.displayMessageBody)
+                }
+            }
+
+            processIncomingMessage(
+                context,
+                normalizedSender,
+                fullBody,
+                smsMessages[0].timestampMillis,
+                smsMessages.size
+            )
+        }
+    }
+
+    private fun reassembleChunk(sender: String, payload: String): String? {
+        if (!payload.startsWith("[") || !payload.contains("]")) return payload
+        val closeBracket = payload.indexOf(']')
+        val tag = payload.substring(1, closeBracket)
+        val slash = tag.indexOf('/')
+        if (slash == -1) return payload
+        val current = tag.substring(0, slash).toIntOrNull() ?: return payload
+        val total = tag.substring(slash + 1).toIntOrNull() ?: return payload
+        val content = payload.substring(closeBracket + 1)
+
+        val userMap = dataChunkBuffer.getOrPut(sender) { mutableMapOf() }
+        userMap[current] = content.toByteArray(Charsets.UTF_8)
+
+        if (userMap.size == total) {
+            val fullBytes = ArrayList<Byte>()
+            for (i in 1..total) {
+                userMap[i]?.let { for (b in it) fullBytes.add(b) }
+            }
+            dataChunkBuffer.remove(sender)
+            return String(fullBytes.toByteArray(), Charsets.UTF_8)
+        }
+        return null // Awaiting remaining chunks
+    }
+
+    private fun processIncomingMessage(
+        context: Context,
+        normalizedSender: String,
+        fullBody: String,
+        timestamp: Long,
+        partsCount: Int
+    ) {
         // 1. Handle X25519 / ECDH Handshake
         if (HandshakeProtocol.isHandshake(fullBody)) {
             val theirKeyBase64 = HandshakeProtocol.extractHandshakeKey(fullBody)
@@ -71,14 +160,13 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                     senderNumber = normalizedSender,
                     recipientNumber = sessionManager.userPhoneNumber.value ?: "Self",
                     body = statusText,
-                    timestamp = smsMessages[0].timestampMillis,
+                    timestamp = timestamp,
                     isOutgoing = false,
                     status = MessageStatus.DELIVERED,
-                    partsCount = smsMessages.size
+                    partsCount = partsCount
                 )
             )
 
-            // Suppress handshake SMS from default SMS app
             try {
                 abortBroadcast()
             } catch (_: Exception) {}
@@ -105,11 +193,7 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
 
         // 3. Handle Towerchat Protocol messages
         if (TowerchatProtocol.isTyping(displayBody)) {
-            sessionManager.setTyping(normalizedSender, true)
-            CoroutineScope(Dispatchers.Main).launch {
-                delay(5000)
-                sessionManager.setTyping(normalizedSender, false)
-            }
+            // Silently ignore typing payloads to avoid noisy UI updates
             try {
                 abortBroadcast()
             } catch (_: Exception) {}
@@ -117,8 +201,8 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
         }
 
         if (TowerchatProtocol.isReadReceipt(displayBody)) {
-            val timestamp = TowerchatProtocol.extractReadReceiptTimestamp(displayBody) ?: System.currentTimeMillis()
-            sessionManager.markOutgoingMessagesAsRead(normalizedSender, timestamp)
+            val receiptTimestamp = TowerchatProtocol.extractReadReceiptTimestamp(displayBody) ?: timestamp
+            sessionManager.markOutgoingMessagesAsRead(normalizedSender, receiptTimestamp)
             try {
                 abortBroadcast()
             } catch (_: Exception) {}
@@ -142,7 +226,7 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                     senderNumber = normalizedSender,
                     recipientNumber = sessionManager.userPhoneNumber.value ?: "Self",
                     body = text,
-                    timestamp = smsMessages[0].timestampMillis,
+                    timestamp = timestamp,
                     isOutgoing = false,
                     status = MessageStatus.DELIVERED,
                     partsCount = 1
@@ -154,10 +238,10 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                     senderNumber = normalizedSender,
                     recipientNumber = sessionManager.userPhoneNumber.value ?: "Self",
                     body = displayBody,
-                    timestamp = smsMessages[0].timestampMillis,
+                    timestamp = timestamp,
                     isOutgoing = false,
                     status = MessageStatus.DELIVERED,
-                    partsCount = smsMessages.size
+                    partsCount = partsCount
                 )
             )
         }
@@ -167,12 +251,11 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
         val isActiveChat = sessionManager.isActiveChat(normalizedSender)
 
         if (isActiveChat) {
-            // High priority interception: suppress notification in default SMS app for active chat
             try {
                 abortBroadcast()
             } catch (_: Exception) {}
-            // Send Read Receipt back to sender
-            smsDispatcher.sendReadReceipt(normalizedSender, smsMessages[0].timestampMillis)
+            // Send Read Receipt back to sender over Port 8901
+            smsDispatcher.sendReadReceipt(normalizedSender, timestamp)
         } else {
             // Not in active chat or backgrounded: show Towerchat notification
             val lastText = messagesToAdd.lastOrNull()?.body ?: displayBody

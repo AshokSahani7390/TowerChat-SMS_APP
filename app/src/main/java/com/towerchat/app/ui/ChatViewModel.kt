@@ -52,6 +52,10 @@ class ChatViewModel @Inject constructor(
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText.asStateFlow()
 
+    // App-to-App WhatsApp style mode (Port 8901) vs Standard SMS mode
+    private val _isAppOnlyMode = MutableStateFlow(true)
+    val isAppOnlyMode: StateFlow<Boolean> = _isAppOnlyMode.asStateFlow()
+
     private val _priorityContacts = MutableStateFlow<Set<String>>(secureConfigStorage.getPriorityContacts())
     val priorityContacts: StateFlow<Set<String>> = _priorityContacts.asStateFlow()
 
@@ -92,12 +96,8 @@ class ChatViewModel @Inject constructor(
         val recipient = activeRecipient.value
         if (recipient != null) {
             viewModelScope.launch(Dispatchers.IO) {
-                // Save draft
+                // Save draft (zero cellular SMS sent for typing)
                 secureConfigStorage.saveDraft(recipient, newText)
-                // Send typing indicator if typing content
-                if (newText.isNotBlank()) {
-                    smsDispatcher.sendTypingIndicator(recipient)
-                }
             }
         }
     }
@@ -115,6 +115,14 @@ class ChatViewModel @Inject constructor(
         // Load draft for this recipient
         val draft = secureConfigStorage.getDraft(recipientNumber)
         _inputText.value = draft
+        // Load App-Only / SMS mode preference for this recipient
+        _isAppOnlyMode.value = secureConfigStorage.isAppOnlyMode(recipientNumber)
+    }
+
+    fun toggleAppOnlyMode(recipient: String) {
+        val newMode = !_isAppOnlyMode.value
+        _isAppOnlyMode.value = newMode
+        secureConfigStorage.setAppOnlyMode(recipient, newMode)
     }
 
     fun isBurnOnExit(recipient: String): Boolean = secureConfigStorage.isBurnOnExitForContact(recipient)
@@ -164,10 +172,11 @@ class ChatViewModel @Inject constructor(
         val text = _inputText.value.trim()
         if (text.isEmpty()) return
 
+        val appOnly = _isAppOnlyMode.value
         _inputText.value = ""
         viewModelScope.launch(Dispatchers.IO) {
             secureConfigStorage.clearDraft(recipient)
-            val result = smsDispatcher.sendMessage(recipient, text)
+            val result = smsDispatcher.sendMessage(recipient, text, isAppOnly = appOnly)
             result.onFailure { ex ->
                 _uiErrorEvents.emit(ex.message ?: "Failed to dispatch SMS")
             }
