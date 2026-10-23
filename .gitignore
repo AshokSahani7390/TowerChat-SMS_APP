@@ -9,6 +9,7 @@ app/build/
 *.apk
 *.aab
 *.ap_
+*.zip
 output.json
 
 # Local Configuration & Machine-Specific Files (Contains usernames & paths)
