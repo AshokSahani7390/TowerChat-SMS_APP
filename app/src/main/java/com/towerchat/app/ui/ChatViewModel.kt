@@ -6,6 +6,7 @@ import com.towerchat.app.crypto.KeySessionRepository
 import com.towerchat.app.data.SecureConfigStorage
 import com.towerchat.app.data.model.Contact
 import com.towerchat.app.data.model.Message
+import com.towerchat.app.data.model.MessageStatus
 import com.towerchat.app.data.model.QuotaState
 import com.towerchat.app.data.session.ChatSessionManager
 import com.towerchat.app.telephony.CallManager
@@ -27,8 +28,9 @@ import javax.inject.Inject
 
 data class ConversationSummary(
     val recipientNumber: String,
-    val lastMessage: Message,
-    val unreadCount: Int = 0
+    val lastMessage: Message? = null,
+    val unreadCount: Int = 0,
+    val lastTimestamp: Long = 0L
 )
 
 @HiltViewModel
@@ -77,18 +79,22 @@ class ChatViewModel @Inject constructor(
         else messagesMap[Contact.normalizePhoneNumber(activeRecipient)] ?: emptyList()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // All active conversations in RAM
-    val conversations: StateFlow<List<ConversationSummary>> = sessionManager.messages.combine(
-        MutableStateFlow(Unit)
-    ) { messagesMap, _ ->
-        messagesMap.mapNotNull { (recipient, messageList) ->
-            messageList.lastOrNull()?.let { lastMsg ->
-                ConversationSummary(
-                    recipientNumber = recipient,
-                    lastMessage = lastMsg
-                )
-            }
-        }.sortedByDescending { it.lastMessage.timestamp }
+    // All active conversations in RAM (retains contact number even when chats are deleted)
+    val conversations: StateFlow<List<ConversationSummary>> = combine(
+        sessionManager.messages,
+        sessionManager.contactActivity
+    ) { messagesMap, activityMap ->
+        messagesMap.keys.map { recipient ->
+            val messageList = messagesMap[recipient] ?: emptyList()
+            val lastMsg = messageList.lastOrNull()
+            val timestamp = lastMsg?.timestamp ?: (activityMap[recipient] ?: 0L)
+            ConversationSummary(
+                recipientNumber = recipient,
+                lastMessage = lastMsg,
+                unreadCount = messageList.count { !it.isOutgoing && it.status != MessageStatus.READ },
+                lastTimestamp = timestamp
+            )
+        }.sortedByDescending { it.lastTimestamp }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun updateInputText(newText: String) {
@@ -111,18 +117,15 @@ class ChatViewModel @Inject constructor(
     }
 
     fun openChat(recipientNumber: String) {
+        sessionManager.ensureContactExists(recipientNumber)
         sessionManager.setActiveChat(recipientNumber)
         // Load draft for this recipient
         val draft = secureConfigStorage.getDraft(recipientNumber)
         _inputText.value = draft
-        // Load App-Only / SMS mode preference for this recipient
-        _isAppOnlyMode.value = secureConfigStorage.isAppOnlyMode(recipientNumber)
     }
 
     fun toggleAppOnlyMode(recipient: String) {
-        val newMode = !_isAppOnlyMode.value
-        _isAppOnlyMode.value = newMode
-        secureConfigStorage.setAppOnlyMode(recipient, newMode)
+        // App-to-App mode is permanently active (Plain SMS removed)
     }
 
     fun isBurnOnExit(recipient: String): Boolean = secureConfigStorage.isBurnOnExitForContact(recipient)
@@ -145,7 +148,8 @@ class ChatViewModel @Inject constructor(
     }
 
     fun deleteConversation(recipient: String) {
-        sessionManager.clearMessagesForContact(recipient)
+        // Complete deletion: removes contact and all messages from RAM
+        sessionManager.clearMessagesForContact(recipient, keepContact = false)
         keySessionRepository.clearKeysForContact(recipient)
         secureConfigStorage.clearDraft(recipient)
         if (activeRecipient.value?.let { Contact.normalizePhoneNumber(it) } == Contact.normalizePhoneNumber(recipient)) {
@@ -154,29 +158,30 @@ class ChatViewModel @Inject constructor(
     }
 
     fun closeChatWithBurnOnExit(recipient: String) {
-        if (secureConfigStorage.isBurnOnExitForContact(recipient)) {
-            sessionManager.purgeUnsavedMessagesForContact(recipient)
-        }
+        // Back press behavior: delete all chat messages from RAM, but keep contact number in the list
+        sessionManager.clearMessagesForContact(recipient, keepContact = true)
+        _inputText.value = ""
         sessionManager.setActiveChat(null)
     }
 
     fun closeChat() {
         val recipient = activeRecipient.value
-        if (recipient != null && secureConfigStorage.isBurnOnExitForContact(recipient)) {
-            sessionManager.purgeUnsavedMessagesForContact(recipient)
+        if (recipient != null) {
+            closeChatWithBurnOnExit(recipient)
+        } else {
+            sessionManager.setActiveChat(null)
         }
-        sessionManager.setActiveChat(null)
     }
 
     fun sendMessage(recipient: String) {
         val text = _inputText.value.trim()
         if (text.isEmpty()) return
 
-        val appOnly = _isAppOnlyMode.value
         _inputText.value = ""
         viewModelScope.launch(Dispatchers.IO) {
             secureConfigStorage.clearDraft(recipient)
-            val result = smsDispatcher.sendMessage(recipient, text, isAppOnly = appOnly)
+            // Plain SMS removed: always send via App-to-App mode (Port 8901)
+            val result = smsDispatcher.sendMessage(recipient, text, isAppOnly = true)
             result.onFailure { ex ->
                 _uiErrorEvents.emit(ex.message ?: "Failed to dispatch SMS")
             }

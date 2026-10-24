@@ -53,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -104,12 +105,12 @@ fun HomeScreen(
         } else {
             conversations.filter {
                 it.recipientNumber.contains(searchQuery.trim(), ignoreCase = true) ||
-                        it.lastMessage.body.contains(searchQuery.trim(), ignoreCase = true)
+                        (it.lastMessage?.body?.contains(searchQuery.trim(), ignoreCase = true) == true)
             }
         }
     }
 
-    // Delete Conversation Confirmation Dialog (Long Press Triggered)
+    // Delete Conversation / Contact Confirmation Dialog (Long Press Triggered)
     if (contactToDelete != null) {
         AlertDialog(
             onDismissRequest = { contactToDelete = null },
@@ -123,7 +124,7 @@ fun HomeScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Delete Conversation?",
+                        text = "Delete Contact?",
                         color = GmTextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
@@ -132,7 +133,7 @@ fun HomeScreen(
             },
             text = {
                 Text(
-                    text = "Delete all messages and chat history with ${contactToDelete}? All data will be immediately erased from RAM.",
+                    text = "Delete contact ${contactToDelete} and remove all messages? All chat history with this contact will be permanently erased.",
                     color = GmTextSecondary,
                     fontSize = 14.sp
                 )
@@ -152,7 +153,7 @@ fun HomeScreen(
                     ),
                     shape = RoundedCornerShape(20.dp)
                 ) {
-                    Text("Delete", fontWeight = FontWeight.Bold)
+                    Text("Delete Contact", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -632,8 +633,13 @@ private fun ConversationListItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {}
 ) {
-    val timeFormatted = remember(conversation.lastMessage.timestamp) {
-        SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(conversation.lastMessage.timestamp))
+    val timeFormatted = remember(conversation.lastMessage?.timestamp, conversation.lastTimestamp) {
+        val ts = conversation.lastMessage?.timestamp ?: conversation.lastTimestamp
+        if (ts > 0L) {
+            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ts))
+        } else {
+            ""
+        }
     }
 
     Row(
@@ -685,11 +691,13 @@ private fun ConversationListItem(
                         }
                     }
                 }
-                Text(
-                    text = timeFormatted,
-                    color = GmTextMuted,
-                    fontSize = 12.sp
-                )
+                if (timeFormatted.isNotBlank()) {
+                    Text(
+                        text = timeFormatted,
+                        color = GmTextMuted,
+                        fontSize = 12.sp
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -698,27 +706,39 @@ private fun ConversationListItem(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (conversation.lastMessage.isOutgoing) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Sent",
-                        tint = GmTextSecondary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(3.dp))
+                val lastMsg = conversation.lastMessage
+                if (lastMsg != null) {
+                    if (lastMsg.isOutgoing) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Sent",
+                            tint = GmTextSecondary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "You: ",
+                            color = GmTextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
                     Text(
-                        text = "You: ",
+                        text = lastMsg.body,
                         color = GmTextSecondary,
-                        fontSize = 13.sp
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Text(
+                        text = "No messages (tap to chat)",
+                        color = GmTextMuted,
+                        fontSize = 13.sp,
+                        fontStyle = FontStyle.Italic,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                Text(
-                    text = conversation.lastMessage.body,
-                    color = GmTextSecondary,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }

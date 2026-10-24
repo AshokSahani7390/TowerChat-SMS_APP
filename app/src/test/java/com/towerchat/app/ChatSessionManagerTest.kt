@@ -81,4 +81,38 @@ class ChatSessionManagerTest {
         assertTrue(sessionManager.isActiveChat("+918888888888"))
         assertFalse(sessionManager.isActiveChat("+917777777777"))
     }
+
+    @Test
+    fun testClearMessagesKeepsContactInMapWhenKeepContactIsTrue() {
+        val message = Message(
+            senderNumber = "+919999999999",
+            recipientNumber = "+918888888888",
+            body = "Ephemeral message",
+            isOutgoing = true
+        )
+        sessionManager.addMessage(message)
+        assertEquals(1, sessionManager.getMessagesForContact("+918888888888").size)
+
+        // Simulate back button press (keepContact = true)
+        sessionManager.clearMessagesForContact("+918888888888", keepContact = true)
+        assertTrue(sessionManager.getMessagesForContact("+918888888888").isEmpty())
+        assertTrue(sessionManager.messages.value.containsKey("+918888888888"))
+    }
+
+    @Test
+    fun testClearMessagesRemovesContactWhenKeepContactIsFalse() {
+        sessionManager.ensureContactExists("+918888888888")
+        assertTrue(sessionManager.messages.value.containsKey("+918888888888"))
+
+        // Simulate long-press delete contact (keepContact = false)
+        sessionManager.clearMessagesForContact("+918888888888", keepContact = false)
+        assertFalse(sessionManager.messages.value.containsKey("+918888888888"))
+    }
+
+    @Test
+    fun testEnsureContactExistsAddsEmptyList() {
+        sessionManager.ensureContactExists("+917777777777")
+        assertTrue(sessionManager.messages.value.containsKey("+917777777777"))
+        assertTrue(sessionManager.getMessagesForContact("+917777777777").isEmpty())
+    }
 }

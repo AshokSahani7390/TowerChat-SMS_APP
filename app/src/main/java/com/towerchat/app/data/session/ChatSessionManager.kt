@@ -29,6 +29,10 @@ class ChatSessionManager @Inject constructor() {
     private val _messages = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
     val messages: StateFlow<Map<String, List<Message>>> = _messages.asStateFlow()
 
+    // Activity timestamp for contacts (to sort conversation list properly even when messages are cleared)
+    private val _contactActivity = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val contactActivity: StateFlow<Map<String, Long>> = _contactActivity.asStateFlow()
+
     // Quota State (100 SMS/day estimate)
     private val _quotaState = MutableStateFlow(QuotaState())
     val quotaState: StateFlow<QuotaState> = _quotaState.asStateFlow()
@@ -47,6 +51,24 @@ class ChatSessionManager @Inject constructor() {
         return currentActive == normalized
     }
 
+    fun ensureContactExists(phoneNumber: String) {
+        val key = Contact.normalizePhoneNumber(phoneNumber)
+        _messages.update { currentMap ->
+            if (!currentMap.containsKey(key)) {
+                currentMap + (key to emptyList())
+            } else {
+                currentMap
+            }
+        }
+        _contactActivity.update { currentMap ->
+            if (!currentMap.containsKey(key)) {
+                currentMap + (key to System.currentTimeMillis())
+            } else {
+                currentMap
+            }
+        }
+    }
+
     fun addMessage(message: Message) {
         val contactKey = if (message.isOutgoing) {
             Contact.normalizePhoneNumber(message.recipientNumber)
@@ -58,6 +80,10 @@ class ChatSessionManager @Inject constructor() {
             val list = currentMap[contactKey]?.toMutableList() ?: mutableListOf()
             list.add(message)
             currentMap + (contactKey to list)
+        }
+
+        _contactActivity.update { currentMap ->
+            currentMap + (contactKey to message.timestamp)
         }
 
         if (message.isOutgoing) {
@@ -146,21 +172,34 @@ class ChatSessionManager @Inject constructor() {
     }
 
     /**
-     * Snapchat-Grade Ephemeral Purge:
-     * When user exits or taps Back, all messages that were NOT explicitly saved in chat
-     * are zeroized from RAM. If no messages were saved, the contact thread is removed completely.
+     * Clears all chat messages for a contact.
+     * When [keepContact] is true (default on Back press):
+     * All messages in that conversation are erased, but the contact entry is preserved
+     * in the conversations list with an empty message list.
+     * When [keepContact] is false (Long press delete):
+     * The contact and all its messages are completely removed from RAM.
      */
-    fun purgeUnsavedMessagesForContact(phoneNumber: String) {
+    fun clearMessagesForContact(phoneNumber: String, keepContact: Boolean = true) {
         val key = Contact.normalizePhoneNumber(phoneNumber)
         _messages.update { currentMap ->
-            val list = currentMap[key] ?: return@update currentMap
-            val savedOnly = list.filter { it.isSaved }
-            if (savedOnly.isEmpty()) {
-                currentMap - key
+            if (keepContact) {
+                currentMap + (key to emptyList())
             } else {
-                currentMap + (key to savedOnly)
+                currentMap - key
             }
         }
+        if (!keepContact) {
+            _contactActivity.update { currentMap ->
+                currentMap - key
+            }
+            _typingStatus.update { currentMap ->
+                currentMap - key
+            }
+        }
+    }
+
+    fun purgeUnsavedMessagesForContact(phoneNumber: String) {
+        clearMessagesForContact(phoneNumber, keepContact = true)
     }
 
     fun deleteMessage(phoneNumber: String, messageId: String) {
@@ -168,23 +207,13 @@ class ChatSessionManager @Inject constructor() {
         _messages.update { currentMap ->
             val list = currentMap[key] ?: return@update currentMap
             val remaining = list.filterNot { it.id == messageId }
-            if (remaining.isEmpty()) {
-                currentMap - key
-            } else {
-                currentMap + (key to remaining)
-            }
-        }
-    }
-
-    fun clearMessagesForContact(phoneNumber: String) {
-        val key = Contact.normalizePhoneNumber(phoneNumber)
-        _messages.update { currentMap ->
-            currentMap - key
+            currentMap + (key to remaining)
         }
     }
 
     fun clearSession() {
         _messages.value = emptyMap()
+        _contactActivity.value = emptyMap()
         _typingStatus.value = emptyMap()
         _activeChatRecipient.value = null
     }
