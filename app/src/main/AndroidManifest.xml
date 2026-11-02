@@ -15,6 +15,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
@@ -72,6 +73,17 @@
             </intent-filter>
         </activity>
 
+        <!-- In-Call & Incoming Call UI Activity -->
+        <activity
+            android:name=".ui.InCallActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Towerchat"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- High-Priority SMS Receiver (Priority 999 for active chat interception) -->
         <receiver
             android:name=".service.SmsBroadcastReceiver"
@@ -89,6 +101,11 @@
                 <data android:port="8901" />
             </intent-filter>
         </receiver>
+
+        <!-- Receiver for In-Call / Notification Actions -->
+        <receiver
+            android:name=".telephony.InCallActionReceiver"
+            android:exported="false" />
 
         <!-- BroadcastReceiver for SMS Sent / Delivered callbacks -->
         <receiver

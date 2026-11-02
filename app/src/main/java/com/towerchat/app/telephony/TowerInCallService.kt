@@ -15,8 +15,14 @@ import android.telecom.InCallService
  */
 class TowerInCallService : InCallService() {
 
+    override fun onCreate() {
+        super.onCreate()
+        CallRepository.setInCallService(this)
+    }
+
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
+        CallRepository.setInCallService(this)
         CallRepository.onCallAdded(call)
     }
 
