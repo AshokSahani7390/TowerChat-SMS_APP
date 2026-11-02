@@ -129,6 +129,14 @@ fun HomeScreen(
 
     var currentMainTab by remember { mutableStateOf(MainTab.CHATS) }
 
+    val requestedTab by callsViewModel?.requestedMainTab?.collectAsState() ?: remember { mutableStateOf(null) }
+    androidx.compose.runtime.LaunchedEffect(requestedTab) {
+        if (requestedTab == "CALLS") {
+            currentMainTab = MainTab.CALLS
+            callsViewModel?.clearRequestedMainTab()
+        }
+    }
+
     // Detail screen / Sim dialog if callsViewModel provided
     val selectedDetail = callsViewModel?.selectedCallDetail?.collectAsState()?.value
     val detailHistory = callsViewModel?.callDetailHistory?.collectAsState()?.value ?: emptyList()
@@ -700,6 +708,8 @@ fun HomeScreen(
                         val hasReadContactsPermission by callsViewModel.hasReadContactsPermission.collectAsState()
                         val isAirplaneMode by callsViewModel.isAirplaneMode.collectAsState()
                         val hasSim by callsViewModel.hasSim.collectAsState()
+                        val isDefaultDialer by callsViewModel.isDefaultDialer.collectAsState()
+                        val isDefaultDialerBannerDismissed by callsViewModel.isDefaultDialerBannerDismissed.collectAsState()
 
                         CallsScreen(
                             currentSubTab = currentSubTab,
@@ -724,7 +734,11 @@ fun HomeScreen(
                             onLoadMoreRecents = { callsViewModel.loadMoreRecents() },
                             onRequestCallLogPermission = onRequestCallLogPermission,
                             onRequestContactsPermission = onRequestContactsPermission,
-                            onOpenSettings = onOpenSettings
+                            onOpenSettings = onOpenSettings,
+                            isDefaultDialer = isDefaultDialer,
+                            isDefaultDialerBannerDismissed = isDefaultDialerBannerDismissed,
+                            onRequestDefaultDialer = { callsViewModel.requestDefaultDialerRole() },
+                            onDismissDefaultDialerBanner = { callsViewModel.dismissDefaultDialerBanner() }
                         )
                     } else {
                         Box(

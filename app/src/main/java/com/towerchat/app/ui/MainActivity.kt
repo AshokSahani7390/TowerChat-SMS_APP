@@ -64,6 +64,13 @@ class MainActivity : ComponentActivity() {
         callsViewModel.refreshState()
     }
 
+    // RoleManager / TelecomManager default dialer role launcher
+    private val defaultDialerRoleLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        callsViewModel.refreshState()
+    }
+
     private fun openAppSettings() {
         val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.fromParts("package", packageName, null)
@@ -103,6 +110,12 @@ class MainActivity : ComponentActivity() {
                     callsViewModel.uiEvents.collect { event ->
                         when (event) {
                             is CallsUiEvent.OpenChat -> viewModel.openChat(event.phoneNumber)
+                            is CallsUiEvent.RequestDefaultDialerRole -> {
+                                val dialerIntent = callsViewModel.createDefaultDialerRequestIntent()
+                                if (dialerIntent != null) {
+                                    defaultDialerRoleLauncher.launch(dialerIntent)
+                                }
+                            }
                             else -> {}
                         }
                     }
@@ -214,6 +227,23 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
+        val action = intent.action
+        val data = intent.data
+
+        if (action == Intent.ACTION_DIAL || action == Intent.ACTION_VIEW) {
+            val scheme = data?.scheme
+            if (scheme.equals("tel", ignoreCase = true)) {
+                val dialNumber = data?.schemeSpecificPart?.replace(Regex("[^0-9+*#]"), "")
+                if (!dialNumber.isNullOrBlank()) {
+                    callsViewModel.setKeypadInput(dialNumber)
+                    return
+                }
+            }
+            callsViewModel.selectSubTab(CallsSubTab.KEYPAD)
+            callsViewModel.requestMainTab("CALLS")
+            return
+        }
+
         val recipient = intent.getStringExtra("recipient_number")
         if (!recipient.isNullOrBlank()) {
             viewModel.openChat(recipient)

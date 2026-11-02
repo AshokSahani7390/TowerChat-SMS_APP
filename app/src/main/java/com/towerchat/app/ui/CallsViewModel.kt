@@ -32,6 +32,7 @@ sealed class CallsUiEvent {
     data class ShowSimSelector(val phoneNumber: String, val simList: List<SimAccountInfo>) : CallsUiEvent()
     data class OpenChat(val phoneNumber: String) : CallsUiEvent()
     data class ShowToast(val message: String) : CallsUiEvent()
+    object RequestDefaultDialerRole : CallsUiEvent()
 }
 
 @HiltViewModel
@@ -43,6 +44,9 @@ class CallsViewModel @Inject constructor(
 
     private val _currentSubTab = MutableStateFlow(CallsSubTab.RECENTS)
     val currentSubTab: StateFlow<CallsSubTab> = _currentSubTab.asStateFlow()
+
+    private val _requestedMainTab = MutableStateFlow<String?>(null)
+    val requestedMainTab: StateFlow<String?> = _requestedMainTab.asStateFlow()
 
     private val _keypadInput = MutableStateFlow("")
     val keypadInput: StateFlow<String> = _keypadInput.asStateFlow()
@@ -86,6 +90,12 @@ class CallsViewModel @Inject constructor(
     private val _hasSim = MutableStateFlow(true)
     val hasSim: StateFlow<Boolean> = _hasSim.asStateFlow()
 
+    private val _isDefaultDialer = MutableStateFlow(false)
+    val isDefaultDialer: StateFlow<Boolean> = _isDefaultDialer.asStateFlow()
+
+    private val _isDefaultDialerBannerDismissed = MutableStateFlow(false)
+    val isDefaultDialerBannerDismissed: StateFlow<Boolean> = _isDefaultDialerBannerDismissed.asStateFlow()
+
     private val _uiEvents = MutableSharedFlow<CallsUiEvent>()
     val uiEvents: SharedFlow<CallsUiEvent> = _uiEvents.asSharedFlow()
 
@@ -102,9 +112,39 @@ class CallsViewModel @Inject constructor(
         _isAirplaneMode.value = callManager.isAirplaneMode()
         _hasSim.value = callManager.hasSim()
         _simAccounts.value = callManager.getSimAccounts()
+        _isDefaultDialer.value = callManager.isDefaultDialer()
 
         loadRecents(reset = true)
         loadContacts()
+    }
+
+    fun requestDefaultDialerRole() {
+        viewModelScope.launch {
+            _uiEvents.emit(CallsUiEvent.RequestDefaultDialerRole)
+        }
+    }
+
+    fun dismissDefaultDialerBanner() {
+        _isDefaultDialerBannerDismissed.value = true
+    }
+
+    fun setKeypadInput(digits: String) {
+        _keypadInput.value = digits
+        updateSmartDialMatches(digits)
+        _currentSubTab.value = CallsSubTab.KEYPAD
+        _requestedMainTab.value = "CALLS"
+    }
+
+    fun requestMainTab(tab: String) {
+        _requestedMainTab.value = tab
+    }
+
+    fun clearRequestedMainTab() {
+        _requestedMainTab.value = null
+    }
+
+    fun createDefaultDialerRequestIntent(): android.content.Intent? {
+        return callManager.createDefaultDialerRequestIntent()
     }
 
     fun selectSubTab(tab: CallsSubTab) {

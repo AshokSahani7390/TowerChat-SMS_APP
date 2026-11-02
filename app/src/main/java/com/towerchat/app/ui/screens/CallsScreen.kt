@@ -121,14 +121,18 @@ fun CallsScreen(
     onLoadMoreRecents: () -> Unit,
     onRequestCallLogPermission: () -> Unit,
     onRequestContactsPermission: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    isDefaultDialer: Boolean = true,
+    isDefaultDialerBannerDismissed: Boolean = false,
+    onRequestDefaultDialer: () -> Unit = {},
+    onDismissDefaultDialerBanner: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(GmBackground)
     ) {
-        // Warning Banners (Airplane mode / No SIM)
+        // Warning Banners (Airplane mode / No SIM / Default Dialer)
         if (isAirplaneMode) {
             BannerWarning(
                 icon = Icons.Default.AirplanemodeActive,
@@ -138,6 +142,11 @@ fun CallsScreen(
             BannerWarning(
                 icon = Icons.Default.SimCardAlert,
                 text = "No SIM card detected. Emergency calls only (112)."
+            )
+        } else if (!isDefaultDialer && !isDefaultDialerBannerDismissed) {
+            DefaultDialerBanner(
+                onRequestDefaultDialer = onRequestDefaultDialer,
+                onDismiss = onDismissDefaultDialerBanner
             )
         }
 
@@ -862,6 +871,85 @@ private fun KeypadButton(
                     contentDescription = null,
                     tint = GmTextMuted,
                     modifier = Modifier.size(10.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DefaultDialerBanner(
+    onRequestDefaultDialer: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = GmSurfaceVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(GmPrimary.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Call,
+                    contentDescription = null,
+                    tint = GmPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Set as default phone app",
+                    color = GmTextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Manage calls, call waiting, and in-call controls directly in TowerChat.",
+                    color = GmTextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row {
+                    Button(
+                        onClick = onRequestDefaultDialer,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GmPrimary,
+                            contentColor = GmOnPrimary
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Set default", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss",
+                    tint = GmTextMuted,
+                    modifier = Modifier.size(16.dp)
                 )
             }
         }
