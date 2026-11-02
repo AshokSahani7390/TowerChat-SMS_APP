@@ -51,6 +51,15 @@ class ChatSessionManager @Inject constructor() {
         return currentActive == normalized
     }
 
+    fun isKnownContact(phoneNumber: String): Boolean {
+        val key = Contact.normalizePhoneNumber(phoneNumber)
+        return _contactActivity.value.containsKey(key) || _messages.value.containsKey(key)
+    }
+
+    fun getAllContactNumbers(): Set<String> {
+        return _contactActivity.value.keys + _messages.value.keys
+    }
+
     fun ensureContactExists(phoneNumber: String) {
         val key = Contact.normalizePhoneNumber(phoneNumber)
         _messages.update { currentMap ->

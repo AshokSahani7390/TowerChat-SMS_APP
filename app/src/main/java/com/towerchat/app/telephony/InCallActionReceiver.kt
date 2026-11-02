@@ -3,7 +3,7 @@ package com.towerchat.app.telephony
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
+import com.towerchat.app.data.session.ChatSessionManager
 
 class InCallActionReceiver : BroadcastReceiver() {
 
@@ -32,7 +32,7 @@ class InCallActionReceiver : BroadcastReceiver() {
             ACTION_CALL_BACK -> {
                 val number = intent.getStringExtra(EXTRA_PHONE_NUMBER)
                 if (!number.isNullOrBlank()) {
-                    val callManager = CallManager(context.applicationContext)
+                    val callManager = CallManager(context.applicationContext, ChatSessionManager())
                     callManager.placeCall(number, null)
                 }
             }

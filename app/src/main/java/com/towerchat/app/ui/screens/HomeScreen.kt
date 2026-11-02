@@ -191,6 +191,7 @@ fun HomeScreen(
     }
 
     BackHandler(enabled = currentMainTab == MainTab.CALLS) {
+        callsViewModel?.clearCallHistory(keepContacts = true)
         currentMainTab = MainTab.CHATS
     }
 

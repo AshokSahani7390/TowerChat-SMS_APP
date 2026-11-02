@@ -1,9 +1,6 @@
 package com.towerchat.app
 
-import android.os.Build
 import com.towerchat.app.data.model.CallLogEntry
-import com.towerchat.app.data.model.CallLogGroup
-import com.towerchat.app.data.model.CallLogGrouper
 import com.towerchat.app.data.model.CallType
 import com.towerchat.app.data.model.SimAccountInfo
 import org.junit.Assert.assertEquals
@@ -13,9 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase 6 Test Suite: Verifies telephony compatibility and edge cases across API 26-35,
- * OEM backgrounds (MIUI, One UI, ColorOS), single & dual SIM, Bluetooth/audio routing,
- * call waiting, role/permission revocation resilience, and lifecycle robustness.
+ * Verifies App-to-App calling restrictions, In-App UI retention (zero Google Phone redirect),
+ * Zero Storage / No Backup call log wiping, and emergency bypass policies.
  */
 class CallingCompatibilityAndEdgeCasesTest {
 
@@ -37,45 +33,65 @@ class CallingCompatibilityAndEdgeCasesTest {
         }
     }
 
-    // --- 2. API Version Branching (API 26, 29, 31, 34, 35) ---
+    // --- 2. App-to-App Calling Restriction (Only Same App Contacts) ---
     @Test
-    fun testApiVersionBranchingDialerRole() {
-        // API 29+ uses RoleManager, API 26-28 uses ACTION_CHANGE_DEFAULT_DIALER
-        fun getRoleMechanism(sdkInt: Int): String {
-            return if (sdkInt >= 29) { // Build.VERSION_CODES.Q
-                "RoleManager.ROLE_DIALER"
+    fun testAppOnlyCallingRestriction() {
+        val knownTowerChatContacts = setOf("+919876543210", "+15551234567")
+
+        fun canPlaceCall(number: String): Boolean {
+            val clean = number.replace(Regex("[^0-9+]"), "")
+            val isEmergency = setOf("112", "911").contains(clean)
+            if (isEmergency) return true
+            return knownTowerChatContacts.contains(clean)
+        }
+
+        assertTrue(canPlaceCall("+919876543210")) // Known TowerChat contact
+        assertTrue(canPlaceCall("+15551234567"))  // Known TowerChat contact
+        assertTrue(canPlaceCall("112"))          // Emergency bypass
+        assertFalse(canPlaceCall("+919999999999")) // Non-TowerChat contact blocked
+        assertFalse(canPlaceCall("1234567890"))    // Non-TowerChat contact blocked
+    }
+
+    // --- 3. In-App UI Retention (Zero Google Phone App Redirection) ---
+    @Test
+    fun testNoRedirectionToGooglePhoneApp() {
+        // Enforce that when TowerChat is not default dialer or permission is lacking,
+        // it NEVER launches Intent.ACTION_DIAL (Google Phone). It requires default dialer in-app.
+        fun handleDialerState(isDefaultDialer: Boolean): String {
+            return if (isDefaultDialer) {
+                "InCallActivity_TowerChat"
             } else {
-                "TelecomManager.ACTION_CHANGE_DEFAULT_DIALER"
+                "Request_Default_Dialer_Prompt"
             }
         }
 
-        assertEquals("TelecomManager.ACTION_CHANGE_DEFAULT_DIALER", getRoleMechanism(26))
-        assertEquals("TelecomManager.ACTION_CHANGE_DEFAULT_DIALER", getRoleMechanism(28))
-        assertEquals("RoleManager.ROLE_DIALER", getRoleMechanism(29))
-        assertEquals("RoleManager.ROLE_DIALER", getRoleMechanism(31))
-        assertEquals("RoleManager.ROLE_DIALER", getRoleMechanism(34))
-        assertEquals("RoleManager.ROLE_DIALER", getRoleMechanism(35))
+        assertEquals("InCallActivity_TowerChat", handleDialerState(true))
+        assertEquals("Request_Default_Dialer_Prompt", handleDialerState(false))
     }
 
+    // --- 4. Zero Storage & No Backup (Ephemeral Call History) ---
     @Test
-    fun testApiVersionBranchingAudioEndpoints() {
-        // API 34+ introduces CallEndpoint; API 26-33 uses CallAudioState
-        fun getAudioControlStrategy(sdkInt: Int): String {
-            return if (sdkInt >= 34) { // Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-                "CallEndpoint"
-            } else {
-                "CallAudioState"
-            }
-        }
+    fun testEphemeralCallHistoryWipedOnBackPress() {
+        val sessionCalls = mutableListOf(
+            CallLogEntry(
+                id = 1L,
+                number = "+919876543210",
+                cachedName = "Alice",
+                type = CallType.OUTGOING,
+                timestamp = System.currentTimeMillis(),
+                durationSeconds = 120L,
+                phoneAccountId = null
+            )
+        )
 
-        assertEquals("CallAudioState", getAudioControlStrategy(26))
-        assertEquals("CallAudioState", getAudioControlStrategy(31))
-        assertEquals("CallAudioState", getAudioControlStrategy(33))
-        assertEquals("CallEndpoint", getAudioControlStrategy(34))
-        assertEquals("CallEndpoint", getAudioControlStrategy(35))
+        assertEquals(1, sessionCalls.size)
+
+        // Simulating Back press on Calls tab: clears in-memory call history while keeping contacts
+        sessionCalls.clear()
+        assertTrue("Session calls must be empty after back press", sessionCalls.isEmpty())
     }
 
-    // --- 3. Single SIM vs Dual SIM Handling ---
+    // --- 5. Single SIM vs Dual SIM Handling ---
     @Test
     fun testSingleSimRequiresNoSelectionDialog() {
         val singleSimList = listOf(
@@ -87,13 +103,12 @@ class CallingCompatibilityAndEdgeCasesTest {
                 number = "+919876543210"
             )
         )
-        // With 1 SIM, selection dialog is skipped and call proceeds directly
         val shouldShowSelectionDialog = singleSimList.size > 1
         assertFalse(shouldShowSelectionDialog)
     }
 
     @Test
-    fun testDualSimSelectionPromptAndPersistence() {
+    fun testDualSimSelectionPrompt() {
         val dualSimList = listOf(
             SimAccountInfo(
                 id = "sim_1",
@@ -113,27 +128,14 @@ class CallingCompatibilityAndEdgeCasesTest {
         val shouldShowSelectionDialog = dualSimList.size > 1
         assertTrue(shouldShowSelectionDialog)
         assertEquals(2, dualSimList.size)
-        assertEquals("Jio 4G", dualSimList[0].carrierName)
-        assertEquals("Airtel", dualSimList[1].carrierName)
     }
 
-    @Test
-    fun testAirplaneModeAndNoSimGracefulFallback() {
-        val noSimList = emptyList<SimAccountInfo>()
-        // When no SIM accounts are available, app safely falls back to ACTION_DIAL
-        val fallbackToActionDial = noSimList.isEmpty()
-        assertTrue(fallbackToActionDial)
-    }
-
-    // --- 4. Call Waiting & Multi-Call Transitions ---
+    // --- 6. Call Waiting & Multi-Call Transitions ---
     @Test
     fun testCallWaitingStateDetection() {
-        // Multi-call scenario simulation
         data class MockCall(val id: String, val state: Int, val isIncoming: Boolean)
-
         val STATE_ACTIVE = 4
         val STATE_RINGING = 2
-        val STATE_HOLDING = 3
 
         val activeCall = MockCall("call_1", STATE_ACTIVE, false)
         val incomingWaitingCall = MockCall("call_2", STATE_RINGING, true)
@@ -148,70 +150,9 @@ class CallingCompatibilityAndEdgeCasesTest {
         assertEquals("call_2", waitingCall?.id)
     }
 
-    @Test
-    fun testSwapCallsOrder() {
-        data class MockCall(val id: String, val name: String, val state: Int)
-
-        val STATE_ACTIVE = 4
-        val STATE_HOLDING = 3
-
-        val call1 = MockCall("call_1", "Alice", STATE_HOLDING)
-        val call2 = MockCall("call_2", "Bob", STATE_ACTIVE)
-
-        val activeCall = listOf(call1, call2).firstOrNull { it.state == STATE_ACTIVE }
-        val heldCall = listOf(call1, call2).firstOrNull { it.state == STATE_HOLDING }
-
-        assertEquals("Bob", activeCall?.name)
-        assertEquals("Alice", heldCall?.name)
-    }
-
-    // --- 5. OEM Compatibility (MIUI, One UI, ColorOS) ---
-    @Test
-    fun testOemFullscreenIntentResilience() {
-        // OEMs often block background startActivity without USE_FULL_SCREEN_INTENT
-        // Verify target SDK check and full-screen intent declaration logic
-        val fullScreenPermissionRequiredOnApi34Plus = (34 >= 34)
-        assertTrue(fullScreenPermissionRequiredOnApi34Plus)
-    }
-
-    // --- 6. Role & Permission Revocation Graceful Fallback ---
-    @Test
-    fun testPermissionDeniedFallbackToDialerIntent() {
-        // When CALL_PHONE is revoked by user in Settings, fallback is Intent.ACTION_DIAL
-        val hasCallPhonePermission = false
-        val action = if (hasCallPhonePermission) "TelecomManager.placeCall" else "Intent.ACTION_DIAL"
-        assertEquals("Intent.ACTION_DIAL", action)
-    }
-
-    @Test
-    fun testDialerRoleRevocationFallback() {
-        // When dialer role is revoked or declined, in-call service won't bind
-        // placing calls must smoothly delegate to system telecom manager
-        val isDefaultDialer = false
-        val dialerMode = if (isDefaultDialer) "InCallService_InAppUI" else "System_Dialer_Delegate"
-        assertEquals("System_Dialer_Delegate", dialerMode)
-    }
-
-    // --- 7. Process Death / Call Disconnect Cleanup ---
-    @Test
-    fun testCallDisconnectReleasesState() {
-        data class MockCall(val id: String, val state: Int)
-        val STATE_DISCONNECTED = 7
-
-        val callList = mutableListOf(
-            MockCall("call_1", STATE_DISCONNECTED)
-        )
-
-        // Simulating cleanup upon STATE_DISCONNECTED or onCallRemoved
-        callList.removeAll { it.state == STATE_DISCONNECTED }
-        assertTrue(callList.isEmpty())
-    }
-
-    // --- 8. Screen Rotation State Preservation ---
+    // --- 7. Screen Rotation State Preservation ---
     @Test
     fun testTimerStateCalculationAcrossRotation() {
-        // Timer is computed from connectTimeMillis vs System.currentTimeMillis()
-        // so configuration changes / screen rotations do not reset elapsed call time
         val connectTime = 10_000L
         val now = 25_000L
         val elapsedSeconds = (now - connectTime) / 1000

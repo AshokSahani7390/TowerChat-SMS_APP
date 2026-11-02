@@ -16,13 +16,15 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import com.towerchat.app.data.model.SimAccountInfo
+import com.towerchat.app.data.session.ChatSessionManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class CallManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val sessionManager: ChatSessionManager
 ) {
 
     companion object {
@@ -37,6 +39,15 @@ class CallManager @Inject constructor(
 
     private val subscriptionManager: SubscriptionManager?
         get() = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+
+    /**
+     * Checks if the device currently has an active SIM card inserted.
+     */
+    fun hasSim(): Boolean {
+        val tm = telephonyManager ?: return false
+        return tm.simState != TelephonyManager.SIM_STATE_ABSENT &&
+                tm.simState != TelephonyManager.SIM_STATE_UNKNOWN
+    }
 
     /**
      * Checks if the given number is a certified emergency number.
@@ -68,85 +79,68 @@ class CallManager @Inject constructor(
      */
     fun isAirplaneMode(): Boolean {
         return try {
-            Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0
+            Settings.Global.getInt(
+                context.contentResolver,
+                Settings.Global.AIRPLANE_MODE_ON,
+                0
+            ) != 0
         } catch (_: Exception) {
             false
         }
     }
 
     /**
-     * Checks whether the device has an active, ready cellular SIM card.
-     */
-    fun hasSim(): Boolean {
-        val tm = telephonyManager ?: return false
-        val simState = tm.simState
-        if (simState == TelephonyManager.SIM_STATE_READY) return true
-
-        return try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                val activeCount = subscriptionManager?.activeSubscriptionInfoCount ?: 0
-                activeCount > 0
-            } else {
-                simState != TelephonyManager.SIM_STATE_ABSENT
-            }
-        } catch (_: Exception) {
-            simState != TelephonyManager.SIM_STATE_ABSENT
-        }
-    }
-
-    /**
-     * Retrieves carrier voicemail number if available.
+     * Resolves the configured voicemail number for the active subscription.
      */
     fun getVoicemailNumber(): String? {
+        val tm = telephonyManager ?: return null
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
             return null
         }
         return try {
-            telephonyManager?.voiceMailNumber
-        } catch (_: Exception) {
+            tm.voiceMailNumber
+        } catch (_: SecurityException) {
             null
         }
     }
 
     /**
-     * Retrieves all available call-capable SIM phone accounts for dual-SIM selection.
+     * Queries available SIM subscriptions on the device for dual-SIM management.
      */
     fun getSimAccounts(): List<SimAccountInfo> {
-        val telecom = telecomManager ?: return emptyList()
         val accounts = mutableListOf<SimAccountInfo>()
-
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            return emptyList()
+            return accounts
         }
 
         try {
-            val handles: List<PhoneAccountHandle> = telecom.getCallCapablePhoneAccounts() ?: emptyList()
-            val subList = try {
-                subscriptionManager?.activeSubscriptionInfoList ?: emptyList()
-            } catch (_: Exception) {
-                emptyList()
-            }
+            val subManager = subscriptionManager ?: return accounts
+            val subList = subManager.activeSubscriptionInfoList
+            if (subList != null) {
+                for (info in subList) {
+                    val carrier = info.carrierName?.toString() ?: "SIM ${info.simSlotIndex + 1}"
+                    val displayName = info.displayName?.toString() ?: carrier
+                    val number = try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            subManager.getPhoneNumber(info.subscriptionId)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            info.number
+                        }
+                    } catch (_: Exception) {
+                        null
+                    }
 
-            for ((index, handle) in handles.withIndex()) {
-                val phoneAccount = telecom.getPhoneAccount(handle)
-                val label = phoneAccount?.label?.toString() ?: "SIM ${index + 1}"
-                val matchingSub = subList.firstOrNull { it.subscriptionId.toString() == handle.id }
-
-                val carrierName = matchingSub?.carrierName?.toString()
-                    ?: matchingSub?.displayName?.toString()
-                    ?: label
-
-                val slotIndex = matchingSub?.simSlotIndex ?: index
-
-                accounts.add(
-                    SimAccountInfo(
-                        id = handle.id,
-                        label = label,
-                        carrierName = carrierName,
-                        slotIndex = slotIndex,
-                        number = matchingSub?.number
+                    accounts.add(
+                        SimAccountInfo(
+                            id = info.subscriptionId.toString(),
+                            label = displayName,
+                            carrierName = carrier,
+                            slotIndex = info.simSlotIndex,
+                            number = number
+                        )
                     )
-                )
+                }
             }
         } catch (_: Exception) {
             // Failsafe in case of OEM security restriction
@@ -172,10 +166,18 @@ class CallManager @Inject constructor(
     }
 
     /**
-     * Places a cellular voice call following the mandatory architectural rules:
-     * 1. Emergency numbers (112, etc.) go straight to TelecomManager with zero delay, no custom logic, and no confirmation dialog.
-     * 2. If CALL_PHONE permission is granted, initiates direct call via TelecomManager.placeCall with specified SIM (if provided).
-     * 3. If CALL_PHONE permission is denied, gracefully falls back to Intent.ACTION_DIAL (never crashes).
+     * Checks if a contact exists in TowerChat (App-to-App mode).
+     */
+    fun isTowerChatContact(phoneNumber: String): Boolean {
+        return sessionManager.isKnownContact(phoneNumber)
+    }
+
+    /**
+     * Places a cellular voice call following the strict App-to-App and In-App UI guidelines:
+     * 1. Emergency numbers (112, etc.) go straight to TelecomManager with zero delay.
+     * 2. Non-emergency calls are RESTRICTED to TowerChat contacts (same app only).
+     * 3. Calls STAY inside TowerChat - NEVER redirects to Google Phone app (no ACTION_DIAL).
+     *    Requires TowerChat to be the default dialer.
      */
     fun placeCall(phoneNumber: String, phoneAccountHandle: PhoneAccountHandle? = null): Boolean {
         val cleanNumber = phoneNumber.replace(Regex("[^0-9+]"), "")
@@ -193,23 +195,23 @@ class CallManager @Inject constructor(
                     telecomManager?.placeCall(uri, extras)
                     true
                 } else {
-                    val emergencyIntent = Intent(Intent.ACTION_DIAL, uri).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(emergencyIntent)
-                    true
+                    false
                 }
             } catch (_: Exception) {
-                // Secondary fallback
-                val dialIntent = Intent(Intent.ACTION_DIAL, uri).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(dialIntent)
-                true
+                false
             }
         }
 
-        // Standard Call Placement
+        // App-to-App restriction: Calling is only allowed for TowerChat contacts
+        if (!isTowerChatContact(cleanNumber)) {
+            return false
+        }
+
+        // Must be default dialer to stay 100% inside TowerChat (prevents redirecting to Google Phone app)
+        if (!isDefaultDialer()) {
+            return false
+        }
+
         val hasCallPhone = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
 
         if (hasCallPhone && telecomManager != null) {
@@ -222,23 +224,10 @@ class CallManager @Inject constructor(
                 telecomManager?.placeCall(uri, extras)
                 true
             } catch (_: Exception) {
-                // Fallback to ACTION_DIAL if TelecomManager.placeCall encounters OEM rejection
-                fallbackToDialer(uri)
+                false
             }
         } else {
-            return fallbackToDialer(uri)
-        }
-    }
-
-    private fun fallbackToDialer(uri: Uri): Boolean {
-        return try {
-            val dialIntent = Intent(Intent.ACTION_DIAL, uri).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(dialIntent)
-            true
-        } catch (_: Exception) {
-            false
+            return false
         }
     }
 

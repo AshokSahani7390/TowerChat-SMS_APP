@@ -10,6 +10,8 @@ import android.telecom.DisconnectCause
 import android.telecom.InCallService
 import android.telecom.VideoProfile
 import android.telephony.SmsManager
+import com.towerchat.app.data.model.CallLogEntry
+import com.towerchat.app.data.model.CallType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,9 +19,11 @@ import java.lang.ref.WeakReference
 
 /**
  * CallRepository maintains in-memory Telecom Call states, Call.Callback lifecycles,
- * audio routing, and proximity sensor wake locks.
+ * audio routing, proximity sensor wake locks, and RAM-only session call history.
  *
  * Strict RAM-only architecture: zero disk, zero database, zero SharedPreferences.
+ * All calls are immediately purged from system CallLog.Calls via CallCleanupHelper,
+ * and session call history in RAM is wiped on Back press.
  */
 @Suppress("DEPRECATION")
 object CallRepository {
@@ -38,6 +42,10 @@ object CallRepository {
 
     private val _audioState = MutableStateFlow<CallAudioState?>(null)
     val audioState: StateFlow<CallAudioState?> = _audioState.asStateFlow()
+
+    // Volatile in-memory call events for the active session (Zero disk, wiped on Back press)
+    private val _sessionCalls = MutableStateFlow<List<CallLogEntry>>(emptyList())
+    val sessionCalls: StateFlow<List<CallLogEntry>> = _sessionCalls.asStateFlow()
 
     private var inCallServiceRef: WeakReference<InCallService>? = null
     private var proximityWakeLock: PowerManager.WakeLock? = null
@@ -101,6 +109,12 @@ object CallRepository {
 
         updateCallStates()
 
+        // Clean up system call log immediately to ensure zero trace and no cloud backup
+        appContext?.let { ctx ->
+            val number = getPhoneNumber(call)
+            CallCleanupHelper.deleteFromSystemCallLog(ctx, number)
+        }
+
         if (current.isEmpty()) {
             releaseProximityWakeLock()
             appContext?.let { ctx ->
@@ -110,14 +124,47 @@ object CallRepository {
     }
 
     private fun handleCallDisconnected(call: Call) {
+        val number = getPhoneNumber(call)
+        val name = getCallerDisplayName(call)
         val disconnectCause = call.details?.disconnectCause
+
         if (disconnectCause?.code == DisconnectCause.MISSED) {
             appContext?.let { ctx ->
-                val number = getPhoneNumber(call)
-                val name = getCallerDisplayName(call)
                 InCallNotificationManager.showMissedCallNotification(ctx, number, name)
             }
         }
+
+        // Record in volatile session RAM log
+        if (number.isNotBlank()) {
+            val connectTime = call.details?.connectTimeMillis ?: 0L
+            val duration = if (connectTime > 0L) (System.currentTimeMillis() - connectTime) / 1000L else 0L
+            val type = when {
+                disconnectCause?.code == DisconnectCause.MISSED -> CallType.MISSED
+                disconnectCause?.code == DisconnectCause.REJECTED -> CallType.REJECTED
+                call.details?.hasProperty(Call.Details.PROPERTY_CONFERENCE) == true -> CallType.OUTGOING
+                else -> if (connectTime > 0L) CallType.INCOMING else CallType.OUTGOING
+            }
+
+            val entry = CallLogEntry(
+                id = System.currentTimeMillis(),
+                number = number,
+                cachedName = name,
+                type = type,
+                timestamp = System.currentTimeMillis(),
+                durationSeconds = duration,
+                phoneAccountId = null
+            )
+            _sessionCalls.value = listOf(entry) + _sessionCalls.value
+        }
+
+        // Clean up system call log immediately so nothing is ever saved on disk or backed up
+        appContext?.let { ctx ->
+            CallCleanupHelper.deleteFromSystemCallLog(ctx, number)
+        }
+    }
+
+    fun clearSessionCalls() {
+        _sessionCalls.value = emptyList()
     }
 
     private fun updateCallStates() {

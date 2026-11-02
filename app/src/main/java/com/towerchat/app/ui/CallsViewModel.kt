@@ -4,12 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.towerchat.app.data.model.CallLogEntry
 import com.towerchat.app.data.model.CallLogGroup
+import com.towerchat.app.data.model.CallLogGrouper
 import com.towerchat.app.data.model.PhoneContact
 import com.towerchat.app.data.model.SimAccountInfo
+import com.towerchat.app.data.session.ChatSessionManager
 import com.towerchat.app.telephony.BlockedNumberItem
 import com.towerchat.app.telephony.BlockedNumberRepository
 import com.towerchat.app.telephony.CallLogRepository
 import com.towerchat.app.telephony.CallManager
+import com.towerchat.app.telephony.CallRepository
 import com.towerchat.app.telephony.ContactsRepository
 import com.towerchat.app.telephony.smartdial.T9SmartDialEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -40,6 +43,7 @@ sealed class CallsUiEvent {
 @HiltViewModel
 class CallsViewModel @Inject constructor(
     private val callManager: CallManager,
+    private val sessionManager: ChatSessionManager,
     private val callLogRepository: CallLogRepository,
     private val contactsRepository: ContactsRepository,
     private val blockedNumberRepository: BlockedNumberRepository
@@ -114,11 +118,14 @@ class CallsViewModel @Inject constructor(
     private val _uiEvents = MutableSharedFlow<CallsUiEvent>()
     val uiEvents: SharedFlow<CallsUiEvent> = _uiEvents.asSharedFlow()
 
-    private var recentsOffset = 0
-    private var isLoadingRecents = false
-
     init {
         refreshState()
+        // Collect in-memory ephemeral RAM call logs for active session (Zero disk, no backup)
+        viewModelScope.launch {
+            CallRepository.sessionCalls.collect { entries ->
+                _recents.value = CallLogGrouper.groupCalls(entries)
+            }
+        }
     }
 
     fun refreshState() {
@@ -209,44 +216,44 @@ class CallsViewModel @Inject constructor(
         }
     }
 
+    fun loadMoreRecents() {}
+
     fun loadRecents(reset: Boolean = false) {
-        if (!callLogRepository.hasPermission()) {
-            _recents.value = emptyList()
-            return
-        }
-
-        if (isLoadingRecents) return
-        isLoadingRecents = true
-
-        if (reset) {
-            recentsOffset = 0
-        }
-
-        viewModelScope.launch {
-            val paged = callLogRepository.getGroupedCallLogs(limit = 60, offset = recentsOffset)
-            if (reset) {
-                _recents.value = paged
-            } else {
-                _recents.value = _recents.value + paged
-            }
-            recentsOffset += paged.size
-            isLoadingRecents = false
-        }
-    }
-
-    fun loadMoreRecents() {
-        loadRecents(reset = false)
+        // Zero storage guarantee: Recents are strictly derived from active RAM session calls
+        val sessionEntries = CallRepository.sessionCalls.value
+        _recents.value = CallLogGrouper.groupCalls(sessionEntries)
     }
 
     fun loadContacts() {
-        if (!contactsRepository.hasPermission()) {
-            _contacts.value = emptyList()
-            _favorites.value = emptyList()
-            return
-        }
-
         viewModelScope.launch {
-            val list = contactsRepository.getContacts()
+            val deviceContacts = if (contactsRepository.hasPermission()) {
+                contactsRepository.getContacts()
+            } else {
+                emptyList()
+            }
+
+            val tcNumbers = sessionManager.getAllContactNumbers()
+            val list = mutableListOf<PhoneContact>()
+
+            for (number in tcNumbers) {
+                val cleanTc = number.replace(Regex("[^0-9+]"), "")
+                val matching = deviceContacts.firstOrNull {
+                    val cleanDev = it.number.replace(Regex("[^0-9+]"), "")
+                    cleanDev.endsWith(cleanTc.takeLast(10)) || cleanTc.endsWith(cleanDev.takeLast(10))
+                }
+                list.add(
+                    PhoneContact(
+                        id = matching?.id ?: number,
+                        name = matching?.name ?: number,
+                        number = number,
+                        photoUri = matching?.photoUri,
+                        isStarred = matching?.isStarred ?: false,
+                        lookupKey = matching?.lookupKey
+                    )
+                )
+            }
+
+            list.sortBy { it.name }
             _contacts.value = list
             _favorites.value = list.filter { it.isStarred }
         }
@@ -255,7 +262,10 @@ class CallsViewModel @Inject constructor(
     fun openCallDetails(group: CallLogGroup) {
         _selectedCallDetail.value = group
         viewModelScope.launch {
-            _callDetailHistory.value = callLogRepository.getCallsForNumber(group.number)
+            val entries = CallRepository.sessionCalls.value.filter {
+                it.number == group.number || it.number.contains(group.number)
+            }
+            _callDetailHistory.value = entries
             _isCurrentDetailBlocked.value = blockedNumberRepository.isBlocked(group.number)
         }
     }
@@ -314,6 +324,25 @@ class CallsViewModel @Inject constructor(
         _callDetailHistory.value = emptyList()
     }
 
+    /**
+     * Clears all session call logs from RAM on Back press.
+     * Preserves contacts in the list.
+     */
+    fun clearCallHistory(keepContacts: Boolean = true) {
+        CallRepository.clearSessionCalls()
+        _recents.value = emptyList()
+        _selectedCallDetail.value = null
+        _callDetailHistory.value = emptyList()
+    }
+
+    /**
+     * Long-press contact deletion: completely removes contact and its messages/calls from RAM.
+     */
+    fun deleteContact(phoneNumber: String) {
+        sessionManager.clearMessagesForContact(phoneNumber, keepContact = false)
+        refreshState()
+    }
+
     fun initiateCall(phoneNumber: String) {
         val cleanNumber = phoneNumber.replace(Regex("[^0-9+]"), "")
         if (cleanNumber.isBlank()) return
@@ -324,7 +353,24 @@ class CallsViewModel @Inject constructor(
             return
         }
 
-        // 2. Dual-SIM check
+        // 2. App-to-App restriction: Calling is only allowed for TowerChat contacts
+        if (!sessionManager.isKnownContact(cleanNumber)) {
+            viewModelScope.launch {
+                _uiEvents.emit(CallsUiEvent.ShowToast("Calling is restricted to TowerChat contacts (same app only)"))
+            }
+            return
+        }
+
+        // 3. Must be default dialer so calling stays 100% inside TowerChat (no Google Phone redirect)
+        if (!callManager.isDefaultDialer()) {
+            viewModelScope.launch {
+                _uiEvents.emit(CallsUiEvent.RequestDefaultDialerRole)
+                _uiEvents.emit(CallsUiEvent.ShowToast("Set TowerChat as default phone app to stay inside TowerChat"))
+            }
+            return
+        }
+
+        // 4. Dual-SIM check
         val accounts = callManager.getSimAccounts()
         if (accounts.size > 1) {
             _pendingSimCall.value = Pair(cleanNumber, accounts)
@@ -334,9 +380,14 @@ class CallsViewModel @Inject constructor(
             return
         }
 
-        // 3. Single SIM or standard placement
+        // 5. Single SIM or standard placement
         val singleHandle = accounts.firstOrNull()?.let { callManager.getPhoneAccountHandle(it.id) }
-        callManager.placeCall(cleanNumber, singleHandle)
+        val success = callManager.placeCall(cleanNumber, singleHandle)
+        if (!success) {
+            viewModelScope.launch {
+                _uiEvents.emit(CallsUiEvent.ShowToast("Unable to place in-app call"))
+            }
+        }
     }
 
     fun dismissSimSelector() {
@@ -357,12 +408,8 @@ class CallsViewModel @Inject constructor(
     }
 
     fun dialVoicemail() {
-        val vmNumber = callManager.getVoicemailNumber()
-        if (!vmNumber.isNullOrBlank()) {
-            initiateCall(vmNumber)
-        } else {
-            // Standard carrier fallback
-            initiateCall("*86")
+        viewModelScope.launch {
+            _uiEvents.emit(CallsUiEvent.ShowToast("Voicemail is unavailable in App-to-App mode"))
         }
     }
 
