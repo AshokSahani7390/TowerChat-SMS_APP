@@ -105,7 +105,7 @@ Functional Requirements
 - FR-05 The app shall display sent and received messages in a scrollable chat view ordered by system timestamp.
 - FR-06 The app shall show a sent/failed indicator per message using the `SmsManager` sent PendingIntent callback.
 - FR-07 The app shall display a live SMS quota counter showing estimated messages remaining today based on Jio's 100 SMS/day limit. This is a local counter only — the carrier does not expose quota via API.
-- FR-08 The app shall provide cellular voice calling and native dialer capabilities: place calls via `TelecomManager.placeCall()` (with fallback to `Intent.ACTION_DIAL`), host a dedicated Calls tab (Keypad with T9 Smart Dial, Recents via system call log, Favorites, Contacts, SIM selector), host incoming and in-call interfaces via `InCallService` when assigned the default dialer role (supporting mute, speaker, audio route selection, hold, DTMF keypad, add call, merge/swap, call waiting, and reject-with-SMS), and route emergency numbers (112 and localized emergency codes) directly to TelecomManager with zero custom delay or confirmation dialogs.
+- FR-08 The app shall provide cellular voice calling and native dialer capabilities: place calls via `TelecomManager.placeCall()` (with fallback to `Intent.ACTION_DIAL`), host a dedicated Calls tab (Keypad with T9 Smart Dial, Recents via system call log, Favorites, Contacts, SIM selector), host incoming and in-call interfaces via `InCallService` when assigned the default dialer role (supporting mute, speaker, audio route selection, hold, DTMF keypad, add call, merge/swap, call waiting, and reject-with-SMS), manage blocked numbers via `BlockedNumberContract`, support dynamic system dark/light theming with accessible 48dp+ touch targets, and route emergency numbers (112 and localized emergency codes) directly to TelecomManager with zero custom delay or confirmation dialogs.
 - FR-09 When the app is closed or the process is killed, all in-memory messages shall be discarded. No chat history shall survive a session.
 - FR-10 The app shall show a notification for incoming SMS from contacts in an active chat even when the app is backgrounded, using a foreground `Service`.
 
@@ -134,8 +134,7 @@ Android Manifest Permissions
 | `READ_CALL_LOG` | Read system call history to populate the Recents list | Yes |
 | `WRITE_CALL_LOG` | Manage and delete call history entries | Yes |
 | `POST_NOTIFICATIONS` | Notification alerts, incoming call heads-up, and missed call notices (Android 13+) | Yes |
-| `USE_FULL_SCREEN_INTENT` | Launch full-screen incoming call UI over the lock screen (Android 14+) | No |
-| `MANAGE_ONGOING_CALLS` | Companion call management on Android 12+ (API 31+) | No |
+| `USE_FULL_SCREEN_INTENT` | Launch full-screen incoming call UI over the lock screen (Android 14+) | No (Special/Install) |
 | `FOREGROUND_SERVICE` | Keep SMS listener and call services active in background | No |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | Declare special-use foreground service on Android 14+ (API 34+) | No |
 | `VIBRATE` | Haptic feedback for incoming ringtone and dialpad button presses | No |
