@@ -6,6 +6,8 @@ import com.towerchat.app.data.model.CallLogEntry
 import com.towerchat.app.data.model.CallLogGroup
 import com.towerchat.app.data.model.PhoneContact
 import com.towerchat.app.data.model.SimAccountInfo
+import com.towerchat.app.telephony.BlockedNumberItem
+import com.towerchat.app.telephony.BlockedNumberRepository
 import com.towerchat.app.telephony.CallLogRepository
 import com.towerchat.app.telephony.CallManager
 import com.towerchat.app.telephony.ContactsRepository
@@ -39,7 +41,8 @@ sealed class CallsUiEvent {
 class CallsViewModel @Inject constructor(
     private val callManager: CallManager,
     private val callLogRepository: CallLogRepository,
-    private val contactsRepository: ContactsRepository
+    private val contactsRepository: ContactsRepository,
+    private val blockedNumberRepository: BlockedNumberRepository
 ) : ViewModel() {
 
     private val _currentSubTab = MutableStateFlow(CallsSubTab.RECENTS)
@@ -47,6 +50,18 @@ class CallsViewModel @Inject constructor(
 
     private val _requestedMainTab = MutableStateFlow<String?>(null)
     val requestedMainTab: StateFlow<String?> = _requestedMainTab.asStateFlow()
+
+    private val _showBlockedNumbersScreen = MutableStateFlow(false)
+    val showBlockedNumbersScreen: StateFlow<Boolean> = _showBlockedNumbersScreen.asStateFlow()
+
+    private val _blockedNumbers = MutableStateFlow<List<BlockedNumberItem>>(emptyList())
+    val blockedNumbers: StateFlow<List<BlockedNumberItem>> = _blockedNumbers.asStateFlow()
+
+    private val _canBlockNumbers = MutableStateFlow(false)
+    val canBlockNumbers: StateFlow<Boolean> = _canBlockNumbers.asStateFlow()
+
+    private val _isCurrentDetailBlocked = MutableStateFlow(false)
+    val isCurrentDetailBlocked: StateFlow<Boolean> = _isCurrentDetailBlocked.asStateFlow()
 
     private val _keypadInput = MutableStateFlow("")
     val keypadInput: StateFlow<String> = _keypadInput.asStateFlow()
@@ -113,9 +128,11 @@ class CallsViewModel @Inject constructor(
         _hasSim.value = callManager.hasSim()
         _simAccounts.value = callManager.getSimAccounts()
         _isDefaultDialer.value = callManager.isDefaultDialer()
+        _canBlockNumbers.value = blockedNumberRepository.canBlockNumbers()
 
         loadRecents(reset = true)
         loadContacts()
+        loadBlockedNumbers()
     }
 
     fun requestDefaultDialerRole() {
@@ -239,6 +256,56 @@ class CallsViewModel @Inject constructor(
         _selectedCallDetail.value = group
         viewModelScope.launch {
             _callDetailHistory.value = callLogRepository.getCallsForNumber(group.number)
+            _isCurrentDetailBlocked.value = blockedNumberRepository.isBlocked(group.number)
+        }
+    }
+
+    fun loadBlockedNumbers() {
+        viewModelScope.launch {
+            _canBlockNumbers.value = blockedNumberRepository.canBlockNumbers()
+            _blockedNumbers.value = blockedNumberRepository.getBlockedNumbers()
+        }
+    }
+
+    fun openBlockedNumbersScreen() {
+        _showBlockedNumbersScreen.value = true
+        loadBlockedNumbers()
+    }
+
+    fun closeBlockedNumbersScreen() {
+        _showBlockedNumbersScreen.value = false
+    }
+
+    fun blockNumber(phoneNumber: String) {
+        viewModelScope.launch {
+            val success = blockedNumberRepository.blockNumber(phoneNumber)
+            if (success) {
+                loadBlockedNumbers()
+                if (_selectedCallDetail.value?.number == phoneNumber) {
+                    _isCurrentDetailBlocked.value = true
+                }
+            }
+        }
+    }
+
+    fun unblockNumber(phoneNumber: String) {
+        viewModelScope.launch {
+            val success = blockedNumberRepository.unblockNumber(phoneNumber)
+            if (success) {
+                loadBlockedNumbers()
+                if (_selectedCallDetail.value?.number == phoneNumber) {
+                    _isCurrentDetailBlocked.value = false
+                }
+            }
+        }
+    }
+
+    fun toggleBlockCurrentDetail() {
+        val detail = _selectedCallDetail.value ?: return
+        if (_isCurrentDetailBlocked.value) {
+            unblockNumber(detail.number)
+        } else {
+            blockNumber(detail.number)
         }
     }
 

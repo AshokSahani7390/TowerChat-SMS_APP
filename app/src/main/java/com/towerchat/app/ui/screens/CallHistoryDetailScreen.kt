@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -31,10 +32,15 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,8 +74,59 @@ fun CallHistoryDetailScreen(
     historyEntries: List<CallLogEntry>,
     onBack: () -> Unit,
     onCallNumber: (String) -> Unit,
-    onMessageNumber: (String) -> Unit
+    onMessageNumber: (String) -> Unit,
+    isBlocked: Boolean = false,
+    onToggleBlock: () -> Unit = {}
 ) {
+    var showBlockDialog by remember { mutableStateOf(false) }
+
+    if (showBlockDialog) {
+        AlertDialog(
+            onDismissRequest = { showBlockDialog = false },
+            title = {
+                Text(
+                    text = if (isBlocked) "Unblock ${group.displayName}?" else "Block ${group.displayName}?",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (isBlocked) {
+                        "You will again receive calls and messages from ${group.number}."
+                    } else {
+                        "Calls and messages from ${group.number} will be declined automatically."
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showBlockDialog = false
+                        onToggleBlock()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isBlocked) MaterialTheme.colorScheme.primary else QuotaExhaustedColor
+                    ),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.height(44.dp)
+                ) {
+                    Text(if (isBlocked) "Unblock" else "Block", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showBlockDialog = false },
+                    modifier = Modifier.height(44.dp)
+                ) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -161,6 +218,27 @@ fun CallHistoryDetailScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Message", fontWeight = FontWeight.Bold)
+                }
+
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { showBlockDialog = true },
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.height(42.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = if (isBlocked) QuotaExhaustedColor else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = if (isBlocked) QuotaExhaustedColor else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isBlocked) "Unblock" else "Block",
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         }

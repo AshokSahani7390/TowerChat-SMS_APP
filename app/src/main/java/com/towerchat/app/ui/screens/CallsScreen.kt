@@ -125,13 +125,41 @@ fun CallsScreen(
     isDefaultDialer: Boolean = true,
     isDefaultDialerBannerDismissed: Boolean = false,
     onRequestDefaultDialer: () -> Unit = {},
-    onDismissDefaultDialerBanner: () -> Unit = {}
+    onDismissDefaultDialerBanner: () -> Unit = {},
+    onOpenBlockedNumbers: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(GmBackground)
     ) {
+        // Top Header with Blocked Numbers Action
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Phone",
+                color = GmTextPrimary,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = onOpenBlockedNumbers,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Block,
+                    contentDescription = "Blocked numbers",
+                    tint = GmTextSecondary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
         // Warning Banners (Airplane mode / No SIM / Default Dialer)
         if (isAirplaneMode) {
             BannerWarning(

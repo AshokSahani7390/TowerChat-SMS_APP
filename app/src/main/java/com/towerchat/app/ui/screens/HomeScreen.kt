@@ -142,6 +142,26 @@ fun HomeScreen(
     val detailHistory = callsViewModel?.callDetailHistory?.collectAsState()?.value ?: emptyList()
     val pendingSimCall = callsViewModel?.pendingSimCall?.collectAsState()?.value
 
+    val showBlockedScreen by callsViewModel?.showBlockedNumbersScreen?.collectAsState() ?: remember { mutableStateOf(false) }
+    val blockedNumbers by callsViewModel?.blockedNumbers?.collectAsState() ?: remember { mutableStateOf(emptyList()) }
+    val canBlockNumbers by callsViewModel?.canBlockNumbers?.collectAsState() ?: remember { mutableStateOf(false) }
+    val isCurrentDetailBlocked by callsViewModel?.isCurrentDetailBlocked?.collectAsState() ?: remember { mutableStateOf(false) }
+
+    if (showBlockedScreen) {
+        BackHandler {
+            callsViewModel?.closeBlockedNumbersScreen()
+        }
+        BlockedNumbersScreen(
+            blockedNumbers = blockedNumbers,
+            canBlockNumbers = canBlockNumbers,
+            onBack = { callsViewModel?.closeBlockedNumbersScreen() },
+            onBlockNumber = { callsViewModel?.blockNumber(it) },
+            onUnblockNumber = { callsViewModel?.unblockNumber(it) },
+            onRequestDefaultDialer = { callsViewModel?.requestDefaultDialerRole() }
+        )
+        return
+    }
+
     if (selectedDetail != null) {
         BackHandler {
             callsViewModel.closeCallDetails()
@@ -154,7 +174,9 @@ fun HomeScreen(
             onMessageNumber = {
                 callsViewModel.closeCallDetails()
                 onOpenChat(it)
-            }
+            },
+            isBlocked = isCurrentDetailBlocked,
+            onToggleBlock = { callsViewModel.toggleBlockCurrentDetail() }
         )
         return
     }
@@ -738,7 +760,8 @@ fun HomeScreen(
                             isDefaultDialer = isDefaultDialer,
                             isDefaultDialerBannerDismissed = isDefaultDialerBannerDismissed,
                             onRequestDefaultDialer = { callsViewModel.requestDefaultDialerRole() },
-                            onDismissDefaultDialerBanner = { callsViewModel.dismissDefaultDialerBanner() }
+                            onDismissDefaultDialerBanner = { callsViewModel.dismissDefaultDialerBanner() },
+                            onOpenBlockedNumbers = { callsViewModel.openBlockedNumbersScreen() }
                         )
                     } else {
                         Box(
