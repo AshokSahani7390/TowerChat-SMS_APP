@@ -30,6 +30,7 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     private val viewModel: ChatViewModel by viewModels()
+    private val callsViewModel: CallsViewModel by viewModels()
 
     // Contact Picker Launcher
     private val contactPickerLauncher = registerForActivityResult(
@@ -47,6 +48,32 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         viewModel.initSimIdentity()
+        callsViewModel.refreshState()
+    }
+
+    // Single permission launchers for on-demand prompts from Calls tab
+    private val callLogPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        callsViewModel.refreshState()
+    }
+
+    private val contactsPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        callsViewModel.refreshState()
+    }
+
+    private fun openAppSettings() {
+        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+        startActivity(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        callsViewModel.refreshState()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +98,15 @@ class MainActivity : ComponentActivity() {
                 val priorityContacts by viewModel.priorityContacts.collectAsState()
                 val isTyping by viewModel.isRecipientTyping.collectAsState()
                 val isAppOnlyMode by viewModel.isAppOnlyMode.collectAsState()
+
+                LaunchedEffect(Unit) {
+                    callsViewModel.uiEvents.collect { event ->
+                        when (event) {
+                            is CallsUiEvent.OpenChat -> viewModel.openChat(event.phoneNumber)
+                            else -> {}
+                        }
+                    }
+                }
 
                 AnimatedContent(
                     targetState = when {
@@ -113,6 +149,16 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onDeleteConversation = { recipient ->
                                     viewModel.deleteConversation(recipient)
+                                },
+                                callsViewModel = callsViewModel,
+                                onRequestCallLogPermission = {
+                                    callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                                },
+                                onRequestContactsPermission = {
+                                    contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                                },
+                                onOpenSettings = {
+                                    openAppSettings()
                                 }
                             )
                         }
@@ -149,7 +195,7 @@ class MainActivity : ComponentActivity() {
                                         onSelectTemplate = { template ->
                                             viewModel.sendTemplate(recipient, template)
                                         },
-                                        onVoiceCall = { viewModel.makeCall(recipient) },
+                                        onVoiceCall = { callsViewModel.initiateCall(recipient) },
                                         onBack = { viewModel.closeChatWithBurnOnExit(recipient) }
                                     )
                                 )
@@ -179,7 +225,9 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.SEND_SMS,
             Manifest.permission.RECEIVE_SMS,
             Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.READ_CONTACTS
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.READ_CALL_LOG
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -194,6 +242,7 @@ class MainActivity : ComponentActivity() {
             permissionsLauncher.launch(missing.toTypedArray())
         } else {
             viewModel.initSimIdentity()
+            callsViewModel.refreshState()
         }
     }
 

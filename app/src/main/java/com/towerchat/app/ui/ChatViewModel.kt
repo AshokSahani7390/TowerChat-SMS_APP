@@ -250,7 +250,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun makeCall(recipient: String) {
-        callManager.makeVoiceCall(recipient)
+        callManager.placeCall(recipient)
     }
 
     fun panicWipe() {

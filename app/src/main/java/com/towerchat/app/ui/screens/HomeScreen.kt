@@ -1,5 +1,6 @@
 package com.towerchat.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Check
@@ -39,11 +41,15 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,8 +68,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.towerchat.app.data.model.QuotaState
 import com.towerchat.app.ui.ConversationSummary
+import com.towerchat.app.ui.CallsViewModel
 import com.towerchat.app.ui.components.GoogleAvatar
 import com.towerchat.app.ui.components.QuotaPill
+import com.towerchat.app.ui.components.SimChoiceDialog
 import com.towerchat.app.ui.theme.DarkBorder
 import com.towerchat.app.ui.theme.GmBackground
 import com.towerchat.app.ui.theme.GmOnBackground
@@ -79,6 +87,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+enum class MainTab {
+    CHATS,
+    CALLS
+}
+
 @Composable
 fun HomeScreen(
     quota: QuotaState,
@@ -90,7 +103,11 @@ fun HomeScreen(
     onClearSession: () -> Unit,
     onSendEmergencyBroadcast: () -> Unit = {},
     onPanicWipe: () -> Unit = {},
-    onDeleteConversation: (String) -> Unit = {}
+    onDeleteConversation: (String) -> Unit = {},
+    callsViewModel: CallsViewModel? = null,
+    onRequestCallLogPermission: () -> Unit = {},
+    onRequestContactsPermission: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var showStartChatDialog by remember { mutableStateOf(false) }
@@ -108,6 +125,43 @@ fun HomeScreen(
                         (it.lastMessage?.body?.contains(searchQuery.trim(), ignoreCase = true) == true)
             }
         }
+    }
+
+    var currentMainTab by remember { mutableStateOf(MainTab.CHATS) }
+
+    // Detail screen / Sim dialog if callsViewModel provided
+    val selectedDetail = callsViewModel?.selectedCallDetail?.collectAsState()?.value
+    val detailHistory = callsViewModel?.callDetailHistory?.collectAsState()?.value ?: emptyList()
+    val pendingSimCall = callsViewModel?.pendingSimCall?.collectAsState()?.value
+
+    if (selectedDetail != null) {
+        BackHandler {
+            callsViewModel.closeCallDetails()
+        }
+        CallHistoryDetailScreen(
+            group = selectedDetail,
+            historyEntries = detailHistory,
+            onBack = { callsViewModel.closeCallDetails() },
+            onCallNumber = { callsViewModel.initiateCall(it) },
+            onMessageNumber = {
+                callsViewModel.closeCallDetails()
+                onOpenChat(it)
+            }
+        )
+        return
+    }
+
+    if (pendingSimCall != null) {
+        SimChoiceDialog(
+            phoneNumber = pendingSimCall.first,
+            simAccounts = pendingSimCall.second,
+            onSelectSim = { callsViewModel.selectSimForCall(it) },
+            onDismiss = { callsViewModel.dismissSimSelector() }
+        )
+    }
+
+    BackHandler(enabled = currentMainTab == MainTab.CALLS) {
+        currentMainTab = MainTab.CHATS
     }
 
     // Delete Conversation / Contact Confirmation Dialog (Long Press Triggered)
@@ -444,184 +498,300 @@ fun HomeScreen(
         )
     }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(GmBackground)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        // Main Tab Content Area
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            when (currentMainTab) {
+                MainTab.CHATS -> {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(modifier = Modifier.fillMaxSize()) {
 
-            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
 
-            // Google Messages Top Search Capsule
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .height(52.dp)
-                    .clip(CircleShape)
-                    .background(GmSurfaceVariant)
-                    .padding(horizontal = 14.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search",
-                        tint = GmTextSecondary,
-                        modifier = Modifier.size(22.dp)
-                    )
+                            // Google Messages Top Search Capsule
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                                    .height(52.dp)
+                                    .clip(CircleShape)
+                                    .background(GmSurfaceVariant)
+                                    .padding(horizontal = 14.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = "Search",
+                                        tint = GmTextSecondary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
 
-                    Spacer(modifier = Modifier.width(10.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
 
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (searchQuery.isEmpty()) {
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                text = "Search conversations",
+                                                color = GmTextMuted,
+                                                fontSize = 15.sp
+                                            )
+                                        }
+                                        BasicTextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            singleLine = true,
+                                            textStyle = TextStyle(
+                                                color = GmTextPrimary,
+                                                fontSize = 15.sp
+                                            ),
+                                            cursorBrush = SolidColor(GmPrimary),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    // Quota Badge Pill
+                                    QuotaPill(quota = quota)
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    // Google-style Profile Avatar (Purge Session / Security Info)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(GmPrimary)
+                                            .clickable { showProfileDialog = true },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Security,
+                                            contentDescription = "Security Status",
+                                            tint = GmOnPrimary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Google Messages Big Header
                             Text(
-                                text = "Search conversations",
-                                color = GmTextMuted,
-                                fontSize = 15.sp
-                            )
-                        }
-                        BasicTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            singleLine = true,
-                            textStyle = TextStyle(
+                                text = "Messages",
                                 color = GmTextPrimary,
-                                fontSize = 15.sp
-                            ),
-                            cursorBrush = SolidColor(GmPrimary),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                                fontSize = 28.sp,
+                                fontWeight = FontWeight.Normal,
+                                modifier = Modifier.padding(start = 22.dp, top = 18.dp, bottom = 10.dp)
+                            )
 
-                    Spacer(modifier = Modifier.width(6.dp))
+                            // Conversation List or Empty State
+                            if (filteredConversations.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(horizontal = 32.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(72.dp)
+                                                .clip(CircleShape)
+                                                .background(GmSurfaceVariant),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ChatBubbleOutline,
+                                                contentDescription = null,
+                                                tint = GmTextMuted,
+                                                modifier = Modifier.size(36.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Text(
+                                            text = if (searchQuery.isBlank()) "No conversations yet" else "No matches found",
+                                            color = GmTextPrimary,
+                                            fontSize = 17.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = if (searchQuery.isBlank()) {
+                                                "Tap 'Start chat' to begin an encrypted SMS conversation"
+                                            } else {
+                                                "Try searching for a different number or word"
+                                            },
+                                            color = GmTextSecondary,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                ) {
+                                    items(filteredConversations, key = { it.recipientNumber }) { conv ->
+                                        ConversationListItem(
+                                            conversation = conv,
+                                            isPriority = priorityContacts.contains(conv.recipientNumber),
+                                            onClick = { onOpenChat(conv.recipientNumber) },
+                                            onLongClick = { contactToDelete = conv.recipientNumber }
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
-                    // Quota Badge Pill
-                    QuotaPill(quota = quota)
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // Google-style Profile Avatar (Purge Session / Security Info)
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(GmPrimary)
-                            .clickable { showProfileDialog = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = "Security Status",
-                            tint = GmOnPrimary,
-                            modifier = Modifier.size(18.dp)
+                        // Google Messages Extended FAB: "Start chat"
+                        ExtendedFloatingActionButton(
+                            onClick = { showStartChatDialog = true },
+                            icon = {
+                                Icon(
+                                    imageVector = Icons.Default.ChatBubble,
+                                    contentDescription = null,
+                                    tint = GmOnPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            text = {
+                                Text(
+                                    text = "Start chat",
+                                    color = GmOnPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            },
+                            containerColor = GmPrimary,
+                            contentColor = GmOnPrimary,
+                            shape = RoundedCornerShape(18.dp),
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 24.dp)
                         )
                     }
                 }
-            }
+                MainTab.CALLS -> {
+                    if (callsViewModel != null) {
+                        val currentSubTab by callsViewModel.currentSubTab.collectAsState()
+                        val recents by callsViewModel.recents.collectAsState()
+                        val favorites by callsViewModel.favorites.collectAsState()
+                        val contacts by callsViewModel.contacts.collectAsState()
+                        val smartDialMatches by callsViewModel.smartDialMatches.collectAsState()
+                        val keypadInput by callsViewModel.keypadInput.collectAsState()
+                        val callSearchQuery by callsViewModel.searchQuery.collectAsState()
+                        val hasReadCallLogPermission by callsViewModel.hasReadCallLogPermission.collectAsState()
+                        val hasReadContactsPermission by callsViewModel.hasReadContactsPermission.collectAsState()
+                        val isAirplaneMode by callsViewModel.isAirplaneMode.collectAsState()
+                        val hasSim by callsViewModel.hasSim.collectAsState()
 
-            // Google Messages Big Header
-            Text(
-                text = "Messages",
-                color = GmTextPrimary,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Normal,
-                modifier = Modifier.padding(start = 22.dp, top = 18.dp, bottom = 10.dp)
-            )
-
-            // Conversation List or Empty State
-            if (filteredConversations.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    ) {
+                        CallsScreen(
+                            currentSubTab = currentSubTab,
+                            onSelectSubTab = { callsViewModel.selectSubTab(it) },
+                            recents = recents,
+                            favorites = favorites,
+                            contacts = contacts,
+                            smartDialMatches = smartDialMatches,
+                            keypadInput = keypadInput,
+                            searchQuery = callSearchQuery,
+                            hasReadCallLogPermission = hasReadCallLogPermission,
+                            hasReadContactsPermission = hasReadContactsPermission,
+                            isAirplaneMode = isAirplaneMode,
+                            hasSim = hasSim,
+                            onKeypadDigit = { callsViewModel.onKeypadDigit(it) },
+                            onKeypadBackspace = { callsViewModel.onKeypadBackspace() },
+                            onKeypadClear = { callsViewModel.onKeypadClear() },
+                            onKeypadCall = { callsViewModel.initiateCall(it) },
+                            onKeypadVoicemail = { callsViewModel.dialVoicemail() },
+                            onSearchQueryChange = { callsViewModel.updateSearchQuery(it) },
+                            onOpenCallDetails = { callsViewModel.openCallDetails(it) },
+                            onLoadMoreRecents = { callsViewModel.loadMoreRecents() },
+                            onRequestCallLogPermission = onRequestCallLogPermission,
+                            onRequestContactsPermission = onRequestContactsPermission,
+                            onOpenSettings = onOpenSettings
+                        )
+                    } else {
                         Box(
-                            modifier = Modifier
-                                .size(72.dp)
-                                .clip(CircleShape)
-                                .background(GmSurfaceVariant),
+                            modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.ChatBubbleOutline,
-                                contentDescription = null,
-                                tint = GmTextMuted,
-                                modifier = Modifier.size(36.dp)
-                            )
+                            Text("Calls service unavailable", color = GmTextSecondary)
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = if (searchQuery.isBlank()) "No conversations yet" else "No matches found",
-                            color = GmTextPrimary,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = if (searchQuery.isBlank()) {
-                                "Tap 'Start chat' to begin an encrypted SMS conversation"
-                            } else {
-                                "Try searching for a different number or word"
-                            },
-                            color = GmTextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    items(filteredConversations, key = { it.recipientNumber }) { conv ->
-                        ConversationListItem(
-                            conversation = conv,
-                            isPriority = priorityContacts.contains(conv.recipientNumber),
-                            onClick = { onOpenChat(conv.recipientNumber) },
-                            onLongClick = { contactToDelete = conv.recipientNumber }
-                        )
                     }
                 }
             }
         }
 
-        // Google Messages Extended FAB: "Start chat"
-        ExtendedFloatingActionButton(
-            onClick = { showStartChatDialog = true },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.ChatBubble,
-                    contentDescription = null,
-                    tint = GmOnPrimary,
-                    modifier = Modifier.size(20.dp)
+        // Bottom Navigation Bar (Chats / Calls)
+        NavigationBar(
+            containerColor = GmSurface,
+            contentColor = GmTextPrimary,
+            tonalElevation = 0.dp
+        ) {
+            NavigationBarItem(
+                selected = currentMainTab == MainTab.CHATS,
+                onClick = { currentMainTab = MainTab.CHATS },
+                icon = {
+                    Icon(
+                        imageVector = if (currentMainTab == MainTab.CHATS) Icons.Default.ChatBubble else Icons.Default.ChatBubbleOutline,
+                        contentDescription = "Chats"
+                    )
+                },
+                label = {
+                    Text(
+                        text = "Chats",
+                        fontWeight = if (currentMainTab == MainTab.CHATS) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = GmPrimary,
+                    selectedTextColor = GmPrimary,
+                    indicatorColor = GmPrimary.copy(alpha = 0.15f),
+                    unselectedIconColor = GmTextMuted,
+                    unselectedTextColor = GmTextMuted
                 )
-            },
-            text = {
-                Text(
-                    text = "Start chat",
-                    color = GmOnPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold
+            )
+
+            NavigationBarItem(
+                selected = currentMainTab == MainTab.CALLS,
+                onClick = { currentMainTab = MainTab.CALLS },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Call,
+                        contentDescription = "Calls"
+                    )
+                },
+                label = {
+                    Text(
+                        text = "Calls",
+                        fontWeight = if (currentMainTab == MainTab.CALLS) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = GmPrimary,
+                    selectedTextColor = GmPrimary,
+                    indicatorColor = GmPrimary.copy(alpha = 0.15f),
+                    unselectedIconColor = GmTextMuted,
+                    unselectedTextColor = GmTextMuted
                 )
-            },
-            containerColor = GmPrimary,
-            contentColor = GmOnPrimary,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 24.dp)
-        )
+            )
+        }
     }
 }
 
